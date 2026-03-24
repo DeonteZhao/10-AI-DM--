@@ -1,0 +1,16 @@
+{
+  "task_id": "b3c7a404-1e54-49f8-ace1-7916485b3eca",
+  "workflow_run_id": "9fcb478a-dc74-4af6-9061-2f546d0f82f1",
+  "data": {
+    "id": "9fcb478a-dc74-4af6-9061-2f546d0f82f1",
+    "workflow_id": "bf928d76-403e-4204-9a81-a1d80327c1c3",
+    "status": "failed",
+    "outputs": {},
+    "error": "Reached maximum retries for URL https://dice-tales-dev.loca.lt/modules/coc_haunting_cn_20170709/structured",
+    "elapsed_time": 23.182541,
+    "total_tokens": 14430,
+    "total_steps": 7,
+    "created_at": 1774316016,
+    "finished_at": 1774316039
+  }
+}

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>复古印刷/Lo-Fi 风格演示 (Risograph Style)</title>
+  <style>
+    /* 引入思源宋体/类似明朝体作为 Web Font (如果本地没有汇文明朝体的话作为 Fallback) */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap');
+
+    /* 自定义字体：优先使用本地的“汇文明朝体”，如果没有则使用思源宋体 */
+    @font-face {
+      font-family: 'Huiwen Mincho';
+      src: local('Huiwen-mincho'), local('HuiwenMincho-Regular'), local('汇文明朝体');
+      font-weight: normal;
+      font-style: normal;
+    }
+
+    :root {
+      /* 核心配色：极简低对比度 */
+      --paper-bg: #c9bc9e;     /* 带有灰绿色调的复古卡其纸色 */
+      --ink-navy: #1f2041;     /* 深邃的海军蓝墨水色 */
+      --ink-red: #9e3223;      /* 褪色的印泥红，用于点缀 */
+    }
+
+    body, html {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background-color: var(--paper-bg);
+      color: var(--ink-navy);
+      /* 优先汇文明朝体，Fallback 思源宋体 */
+      font-family: 'Huiwen Mincho', 'Noto Serif SC', serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      /* 应用 SVG 滤镜：整体画面轻微的颗粒模糊和色彩偏移，模拟印刷不准 */
+      filter: url(#print-effect);
+    }
+
+    /* 全屏噪点遮罩（模拟粗糙纸张纹理） */
+    .noise-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.15;
+      /* 使用 Base64 编码的微小噪点图片平铺 */
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      /* 混合模式：让噪点和背景颜色自然融合 */
+      mix-blend-mode: multiply;
+    }
+
+    /* 容器布局：模拟老式报纸/档案版式 */
+    .archive-container {
+      width: 100%;
+      max-width: 600px;
+      padding: 40px;
+      position: relative;
+    }
+
+    /* 装饰性十字标（类似印刷套准标记） */
+    .registration-mark {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      opacity: 0.7;
+    }
+    .registration-mark::before, .registration-mark::after {
+      content: '';
+      position: absolute;
+      background-color: var(--ink-navy);
+    }
+    .registration-mark::before { top: 9px; left: 0; width: 20px; height: 2px; }
+    .registration-mark::after { top: 0; left: 9px; width: 2px; height: 20px; }
+    
+    .mark-tl { top: 20px; left: 20px; }
+    .mark-br { bottom: 20px; right: 20px; }
+
+    /* 顶部信息栏：虚线分割，紧凑排版 */
+    .header-meta {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 2px dashed var(--ink-navy);
+      padding-bottom: 15px;
+      margin-bottom: 30px;
+      font-size: 0.9rem;
+      letter-spacing: 0.1em;
+      line-height: 1.6;
+      /* 对文字单独应用“毛边”滤镜 */
+      filter: url(#rough-edge);
+    }
+
+    .meta-column {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 巨型标题：汇文明朝体在此处效果极佳 */
+    h1 {
+      font-size: 5rem;
+      font-weight: 900;
+      margin: 0 0 20px 0;
+      line-height: 1.1;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      /* 毛边滤镜 */
+      filter: url(#rough-edge);
+    }
+
+    h1 .line-1 { display: block; }
+    h1 .line-2 { display: block; padding-left: 20px; }
+    h1 .line-3 { display: block; }
+
+    /* 装饰性眼睛/徽章元素 */
+    .emblem {
+      margin: 40px 0;
+      text-align: center;
+      filter: url(#rough-edge);
+    }
+    
+    .emblem svg {
+      width: 150px;
+      height: auto;
+      fill: none;
+      stroke: var(--ink-navy);
+      stroke-width: 3;
+    }
+
+    /* 正文排版 */
+    .content-block {
+      border-top: 2px solid var(--ink-navy);
+      border-bottom: 2px solid var(--ink-navy);
+      padding: 20px 0;
+      margin-top: 30px;
+      display: flex;
+      gap: 30px;
+      filter: url(#rough-edge);
+    }
+
+    .content-block p {
+      flex: 1;
+      margin: 0;
+      font-size: 1.1rem;
+      line-height: 1.8;
+      text-align: justify;
+    }
+
+    /* 点缀色的印章式标签 */
+    .stamp-tag {
+      display: inline-block;
+      color: var(--ink-red);
+      border: 2px solid var(--ink-red);
+      padding: 4px 8px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      letter-spacing: 0.2em;
+      transform: rotate(-3deg);
+      margin-top: 20px;
+      filter: url(#rough-edge);
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- SVG 滤镜定义区 (不会在页面上可见，只提供滤镜效果) -->
+  <svg style="display: none;">
+    <defs>
+      <!-- 滤镜 1：边缘毛糙 (Rough Edge) 模拟墨水在纸纤维中晕开 -->
+      <filter id="rough-edge">
+        <!-- 产生柏林噪声 -->
+        <feTurbulence type="fractalNoise" baseFrequency="0.15" numOctaves="3" result="noise" />
+        <!-- 用噪声置换原图像的像素位置，scale 控制毛边的夸张程度 -->
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+        <!-- 稍微模糊一下边缘，显得更自然 -->
+        <!-- <feGaussianBlur in="displaced" stdDeviation="0.5" result="blurred" /> -->
+        <!-- 增加对比度，让边缘清晰一点 -->
+        <!-- <feComponentTransfer in="blurred">
+          <feFuncA type="linear" slope="2" intercept="-0.5" />
+        </feComponentTransfer> -->
+      </filter>
+
+      <!-- 滤镜 2：全局印刷效果 (Color Shift & Slight Blur) 模拟套印不准 -->
+      <filter id="print-effect">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="0.4" result="blur" />
+        <!-- 轻微的色差偏移可以放在这里，目前只保留轻微的晕染模糊 -->
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- 全局噪点遮罩 -->
+  <div class="noise-overlay"></div>
+
+  <!-- 主内容区 -->
+  <div class="archive-container">
+    <div class="registration-mark mark-tl"></div>
+    <div class="registration-mark mark-br"></div>
+
+    <div class="header-meta">
+      <div class="meta-column">
+        <span>PROJECT: DICE TALES</span>
+        <span>CLASSIFIED // 1920S</span>
+        <span>LOCATION: UNKNOWN</span>
+      </div>
+      <div class="meta-column" style="text-align: right;">
+        <span>DOC NO. 404-B</span>
+        <span>STATUS: ACTIVE</span>
+        <span>SANITY: CRITICAL</span>
+      </div>
+    </div>
+
+    <h1>
+      <span class="line-1">CALL</span>
+      <span class="line-2">OF</span>
+      <span class="line-3">CTHULHU</span>
+    </h1>
+
+    <div class="emblem">
+      <!-- 手绘风格的神秘眼睛图标 -->
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <ellipse cx="50" cy="50" rx="45" ry="25" />
+        <circle cx="50" cy="50" r="15" />
+        <circle cx="50" cy="50" r="5" fill="var(--ink-navy)" />
+        <line x1="50" y1="5" x2="50" y2="25" />
+        <line x1="50" y1="75" x2="50" y2="95" />
+        <line x1="5" y1="50" x2="25" y2="50" />
+        <line x1="75" y1="50" x2="95" y2="50" />
+      </svg>
+    </div>
+
+    <div class="content-block">
+      <p>
+        在人类理智的边缘，存在着无法名状的恐怖。你作为一名调查员，翻开了这份陈旧的档案。墨水已经褪色，但字里行间透露出的疯狂却愈发浓烈。骰子已经掷下，命运的齿轮开始转动。
+      </p>
+    </div>
+
+    <div class="stamp-tag">
+      TOP SECRET
+    </div>
+  </div>
+
+</body>
+</html>

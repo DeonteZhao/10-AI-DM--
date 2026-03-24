@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dice Tales - Risograph UI 演示</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap');
+
+    @font-face {
+      font-family: 'Huiwen Mincho';
+      src: local('Huiwen-mincho'), local('HuiwenMincho-Regular'), local('汇文明朝体');
+      font-weight: normal;
+      font-style: normal;
+    }
+
+    :root {
+      --paper-bg: #D9CBA0;     /* 稍微明亮一点的卡其纸色，适合 UI 界面 */
+      --paper-light: #e6d8b3;  /* 高亮区域的纸色 */
+      --ink-navy: #1f2041;     /* 主色调：深邃海军蓝 */
+      --ink-red: #9e3223;      /* 点缀色：褪色印泥红 */
+      --ink-green: #3a5a40;    /* 辅色：复古橄榄绿 */
+      --ink-blue: #3e5c76;     /* 辅色：褪色蓝 */
+    }
+
+    body, html {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background-color: var(--paper-bg);
+      color: var(--ink-navy);
+      font-family: 'Huiwen Mincho', 'Noto Serif SC', serif;
+      /* 全局印刷模糊效果 */
+      filter: url(#print-effect);
+    }
+
+    /* 噪点遮罩 */
+    .noise-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.12;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    /* 毛边滤镜类 */
+    .rough-edge {
+      filter: url(#rough-edge);
+    }
+
+    /* === 导航栏：模拟档案夹顶部标签 === */
+    nav {
+      border-bottom: 2px solid var(--ink-navy);
+      padding: 15px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      background-color: var(--paper-bg);
+      z-index: 100;
+    }
+
+    .nav-brand {
+      font-size: 1.5rem;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-brand::before {
+      content: "⚔️";
+      font-size: 1.2rem;
+      filter: grayscale(1) sepia(1) hue-rotate(200deg) saturate(3) brightness(0.5); /* 将emoji颜色调成类似墨水蓝 */
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 30px;
+    }
+
+    .nav-link {
+      font-size: 1.1rem;
+      font-weight: bold;
+      text-decoration: none;
+      color: var(--ink-navy);
+      letter-spacing: 0.1em;
+      position: relative;
+      padding: 5px 0;
+      cursor: pointer;
+    }
+
+    /* 导航栏选中状态：下划线墨迹 */
+    .nav-link.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 3px;
+      background-color: var(--ink-red);
+      transform: rotate(-1deg);
+    }
+
+    .nav-link:hover {
+      color: var(--ink-red);
+    }
+
+    /* === 主容器 === */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 40px;
+    }
+
+    /* === 页面标题区域 === */
+    .page-header {
+      margin-bottom: 50px;
+      border-bottom: 1px dashed var(--ink-navy);
+      padding-bottom: 20px;
+    }
+
+    .page-title {
+      font-size: 3.5rem;
+      font-weight: 900;
+      margin: 0 0 10px 0;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .page-subtitle {
+      font-size: 1.2rem;
+      color: var(--ink-navy);
+      opacity: 0.8;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+
+    /* === 区域标题 === */
+    .section-title {
+      font-size: 2rem;
+      font-weight: 900;
+      margin: 40px 0 20px 0;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .section-title::before {
+      content: "+++";
+      font-size: 1rem;
+      letter-spacing: 2px;
+      color: var(--ink-red);
+    }
+
+    /* === 卡片网格 === */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 30px;
+    }
+
+    /* === 模组卡片：模拟老式通缉令/委托单 === */
+    .card {
+      border: 2px solid var(--ink-navy);
+      padding: 20px;
+      position: relative;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background-color: transparent; /* 透明，露出纸张背景 */
+    }
+
+    /* 卡片四角的定位十字 */
+    .card::before, .card::after {
+      content: '+';
+      position: absolute;
+      color: var(--ink-navy);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .card::before { top: 5px; left: 5px; }
+    .card::after { bottom: 5px; right: 5px; }
+
+    .card:hover {
+      background-color: var(--paper-light);
+      transform: translateY(-2px);
+      box-shadow: 6px 6px 0 var(--ink-navy);
+    }
+
+    /* 卡片顶部标签 */
+    .card-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      border-bottom: 1px solid var(--ink-navy);
+      padding-bottom: 10px;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+    }
+
+    .card-title {
+      font-size: 1.8rem;
+      font-weight: 900;
+      margin: 0 0 10px 0;
+      line-height: 1.2;
+    }
+
+    .card-desc {
+      font-size: 1rem;
+      line-height: 1.6;
+      margin: 0 0 20px 0;
+      text-align: justify;
+    }
+
+    /* 底部状态栏 */
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-top: auto;
+    }
+
+    /* 印章风格的 Tag */
+    .stamp-tag {
+      display: inline-block;
+      border: 2px solid currentColor;
+      padding: 2px 6px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      transform: rotate(-2deg);
+    }
+    .stamp-dnd { color: var(--ink-red); }
+    .stamp-coc { color: var(--ink-green); }
+
+    .card-price {
+      font-size: 1.2rem;
+      font-weight: bold;
+    }
+
+    /* === 角色卡片：模拟身份档案 === */
+    .char-card {
+      border: 2px solid var(--ink-navy);
+      padding: 20px;
+      display: flex;
+      gap: 20px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .char-card:hover {
+      background-color: var(--paper-light);
+      box-shadow: 6px 6px 0 var(--ink-navy);
+    }
+
+    .char-avatar {
+      width: 80px;
+      height: 80px;
+      border: 2px solid var(--ink-navy);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 2.5rem;
+      /* 模拟照片框 */
+      background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(31,32,65,0.1) 5px, rgba(31,32,65,0.1) 6px);
+    }
+
+    .char-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .char-name {
+      font-size: 1.5rem;
+      font-weight: 900;
+      margin: 0 0 5px 0;
+      text-transform: uppercase;
+      border-bottom: 1px dashed var(--ink-navy);
+      padding-bottom: 5px;
+    }
+
+    .char-class {
+      font-size: 0.9rem;
+      letter-spacing: 0.1em;
+      margin-bottom: auto;
+    }
+
+    .char-stats {
+      display: flex;
+      gap: 15px;
+      font-size: 0.85rem;
+      font-weight: bold;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .stat-val {
+      border-bottom: 2px solid var(--ink-navy);
+      padding: 0 5px;
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- SVG 滤镜定义区 -->
+  <svg style="display: none;">
+    <defs>
+      <!-- 毛边滤镜：模拟墨水晕染 -->
+      <filter id="rough-edge">
+        <feTurbulence type="fractalNoise" baseFrequency="0.15" numOctaves="3" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+      </filter>
+      <!-- 全局印刷模糊滤镜 -->
+      <filter id="print-effect">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="0.3" result="blur" />
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- 噪点遮罩 -->
+  <div class="noise-overlay"></div>
+
+  <!-- 导航栏 -->
+  <nav class="rough-edge">
+    <div class="nav-brand">DICE TALES</div>
+    <div class="nav-links">
+      <a class="nav-link active">首页</a>
+      <a class="nav-link">档案库 (模组)</a>
+      <a class="nav-link">调查员 (角色)</a>
+    </div>
+    <div style="font-size: 0.8rem; letter-spacing: 0.1em; font-weight: bold;">
+      ID: ADVENTURER // STATUS: ONLINE
+    </div>
+  </nav>
+
+  <div class="container">
+    
+    <div class="page-header rough-edge">
+      <h1 class="page-title">欢迎回来，调查员</h1>
+      <div class="page-subtitle">FILE REF: LOG-2024 // YOUR LEGEND CONTINUES</div>
+    </div>
+
+    <h2 class="section-title rough-edge">进行中的调查记录</h2>
+    
+    <div class="grid" style="margin-bottom: 50px;">
+      <!-- 冒险记录卡片 -->
+      <div class="card rough-edge">
+        <div class="card-meta">
+          <span>CASE NO. 001</span>
+          <span>DATE: OCT 24</span>
+        </div>
+        <h3 class="card-title">暗夜邪教</h3>
+        <p class="card-desc">
+          理智值正在流失...你必须在下个满月前找到真相，否则一切都将太迟。
+        </p>
+        <div class="card-footer">
+          <span class="stamp-tag stamp-coc" style="border-color: var(--ink-navy); color: var(--ink-navy);">ACTIVE CASE</span>
+          <span style="font-weight: bold; font-size: 0.9rem; text-decoration: underline; cursor: pointer;">继续阅读 -></span>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section-title rough-edge">机密档案 (推荐模组)</h2>
+
+    <div class="grid">
+      <!-- DND 模组卡片 -->
+      <div class="card rough-edge">
+        <div class="card-meta">
+          <span>CLASS: FANTASY</span>
+          <span>DIFF: EASY</span>
+        </div>
+        <h3 class="card-title">冰封疫病</h3>
+        <p class="card-desc">
+          艾森瓦尔德的冰雪覆盖之地，一种神秘的疾病正在蔓延。追溯源头，深入洞穴。
+        </p>
+        <div class="card-footer">
+          <span class="stamp-tag stamp-dnd">D&D 5E</span>
+          <span class="card-price">FREE</span>
+        </div>
+      </div>
+
+      <!-- COC 模组卡片 -->
+      <div class="card rough-edge">
+        <div class="card-meta">
+          <span>CLASS: HORROR</span>
+          <span>DIFF: NORMAL</span>
+        </div>
+        <h3 class="card-title">幽灵古宅</h3>
+        <p class="card-desc">
+          1920年代的新英格兰，一座维多利亚式古宅传出怪异的声响。调查不可名状的恐怖。
+        </p>
+        <div class="card-footer">
+          <span class="stamp-tag stamp-coc">COC 7th</span>
+          <span class="card-price">FREE</span>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section-title rough-edge" style="margin-top: 60px;">已登记人员 (我的角色)</h2>
+    
+    <div class="grid">
+      <!-- 角色卡片 -->
+      <div class="char-card rough-edge">
+        <div class="char-avatar">🧙‍♂️</div>
+        <div class="char-info">
+          <div class="char-name">甘道夫</div>
+          <div class="char-class">LV.1 人类 法师</div>
+          <div class="char-stats">
+            <div class="stat-item">HP <span class="stat-val">8/8</span></div>
+            <div class="stat-item">AC <span class="stat-val">12</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="char-card rough-edge">
+        <div class="char-avatar">🕵️</div>
+        <div class="char-info">
+          <div class="char-name">亚瑟·柯南</div>
+          <div class="char-class">私家侦探</div>
+          <div class="char-stats">
+            <div class="stat-item">HP <span class="stat-val">12</span></div>
+            <div class="stat-item">SAN <span class="stat-val">65</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

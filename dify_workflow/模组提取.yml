@@ -1,0 +1,579 @@
+app:
+  description: ''
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: workflow
+  name: 模组提取
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openrouter:0.0.41@99cd79bc154370c899547ce17cea8edc569e86c06c795d4f8577b5c42eb712c3
+    version: null
+kind: app
+version: 0.6.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: document-extractor
+      id: 1772976239537-source-1772976334313-target
+      source: '1772976239537'
+      sourceHandle: source
+      target: '1772976334313'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: document-extractor
+        targetType: llm
+      id: 1772976334313-source-1772976353362-target
+      source: '1772976334313'
+      sourceHandle: source
+      target: '1772976353362'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: http-request
+      id: 1772976353362-source-1772976454838-target
+      source: '1772976353362'
+      sourceHandle: source
+      target: '1772976454838'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        selected: false
+        title: 用户输入
+        type: start
+        variables:
+        - allowed_file_extensions: []
+          allowed_file_types:
+          - document
+          allowed_file_upload_methods:
+          - local_file
+          - remote_url
+          default: ''
+          hint: ''
+          label: 模组文件
+          options: []
+          placeholder: ''
+          required: true
+          type: file
+          variable: file
+        - default: ''
+          hint: ''
+          label: module_id
+          options: []
+          placeholder: ''
+          required: true
+          type: text-input
+          variable: module_id
+      height: 134
+      id: '1772976239537'
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        is_array_file: false
+        selected: false
+        title: 文档提取器
+        type: document-extractor
+        variable_selector:
+        - '1772976239537'
+        - file
+      height: 103
+      id: '1772976334313'
+      position:
+        x: 447
+        y: 298
+      positionAbsolute:
+        x: 447
+        y: 298
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: google/gemini-3-flash-preview
+          provider: langgenius/openrouter/openrouter
+        prompt_template:
+        - id: 47f052c6-1b02-49a5-90dd-4ae189296175
+          role: system
+          text: '你是TRPG模组解析器。把用户输入的模组文本转成结构化JSON。
+
+            首先，判断这是DND模组还是CoC模组。根据规则体系的不同，提取侧重点也不同。
+            DND侧重战斗、阵营、战术地形和宝藏；CoC侧重悬疑、压抑氛围、秘密、理智损失。
+
+            只输出JSON，不要包含任何解释或多余文本。
+
+            JSON必须包含字段: rule_system, tone, core_conflict, title, background, locations, npcs, events, quests, sequence, triggers, clues, handouts, scene_items, assets。
+
+            rule_system字段: "dnd" 或 "coc"。
+
+            locations字段包含: name, description, connections, npcs, sensory_details(包含visual, auditory, olfactory), tactical_elements(仅DND), hidden_treasures(仅DND), atmosphere(仅CoC), hidden_clues(仅CoC)。
+
+            npcs字段包含: name, description, secrets, personality, appearance, alignment(仅DND), combat_behavior(仅DND), secrets_and_lies(仅CoC), sanity_state(仅CoC)。
+
+            events字段包含: trigger, result, consequences, encounter_type(仅DND), sanity_check_trigger(仅CoC)。
+
+            quests字段包含: name, goal。
+            
+            sequence字段包含: id, title, location, order, description, prerequisites。
+            
+            triggers字段包含: id, name, once, conditions, actions。
+            
+            triggers.conditions字段包含: type, key, operator, value。
+            
+            triggers.actions字段包含: type, target_id, payload。
+            
+            clues字段包含: id, title, content, source, discovery_conditions, sanity_cost(仅CoC), mythos_knowledge(仅CoC)。
+            
+            handouts字段包含: id, title, content, type, asset_ids, grant_conditions, add_to_inventory。
+            
+            scene_items字段包含: id, name, location, description, interactions, linked_clue_ids, magical_properties(仅DND)。
+            
+            assets字段包含: id, name, type, url, description。
+            
+            ⚠️ 请将所有提取的内容翻译为【简体中文】输出。'
+        - id: 2d96bf6c-0a8b-4462-a897-396d2e87c38c
+          role: user
+          text: '{{#1772976334313.text#}}'
+        selected: false
+        structured_output:
+          schema:
+            properties:
+              rule_system:
+                type: string
+                enum: ["dnd", "coc"]
+              tone:
+                type: string
+              core_conflict:
+                type: string
+              assets:
+                items:
+                  properties:
+                    description:
+                      type: string
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    type:
+                      type: string
+                    url:
+                      type: string
+                  required:
+                  - id
+                  - name
+                  - type
+                  - url
+                  type: object
+                type: array
+              background:
+                type: string
+              clues:
+                items:
+                  properties:
+                    content:
+                      type: string
+                    discovery_conditions:
+                      items:
+                        type: string
+                      type: array
+                    id:
+                      type: string
+                    source:
+                      type: string
+                    title:
+                      type: string
+                    sanity_cost:
+                      type: string
+                    mythos_knowledge:
+                      type: boolean
+                  required:
+                  - id
+                  - title
+                  - content
+                  type: object
+                type: array
+              events:
+                items:
+                  properties:
+                    result:
+                      type: string
+                    trigger:
+                      type: string
+                    consequences:
+                      type: string
+                    encounter_type:
+                      type: string
+                    sanity_check_trigger:
+                      type: string
+                  required:
+                  - trigger
+                  - result
+                  type: object
+                type: array
+              locations:
+                items:
+                  properties:
+                    connections:
+                      items:
+                        type: string
+                      type: array
+                    description:
+                      type: string
+                    name:
+                      type: string
+                    npcs:
+                      items:
+                        type: string
+                      type: array
+                    sensory_details:
+                      type: object
+                      properties:
+                        visual:
+                          type: string
+                        auditory:
+                          type: string
+                        olfactory:
+                          type: string
+                    tactical_elements:
+                      type: string
+                    hidden_treasures:
+                      type: string
+                    atmosphere:
+                      type: string
+                    hidden_clues:
+                      type: string
+                  required:
+                  - name
+                  - description
+                  - connections
+                  - npcs
+                  type: object
+                type: array
+              npcs:
+                items:
+                  properties:
+                    description:
+                      type: string
+                    name:
+                      type: string
+                    secrets:
+                      type: string
+                    personality:
+                      type: string
+                    appearance:
+                      type: string
+                    alignment:
+                      type: string
+                    combat_behavior:
+                      type: string
+                    secrets_and_lies:
+                      type: string
+                    sanity_state:
+                      type: string
+                  required:
+                  - name
+                  - description
+                  type: object
+                type: array
+              quests:
+                items:
+                  properties:
+                    goal:
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - name
+                  - goal
+                  type: object
+                type: array
+              scene_items:
+                items:
+                  properties:
+                    description:
+                      type: string
+                    id:
+                      type: string
+                    interactions:
+                      items:
+                        type: string
+                      type: array
+                    linked_clue_ids:
+                      items:
+                        type: string
+                      type: array
+                    location:
+                      type: string
+                    name:
+                      type: string
+                    magical_properties:
+                      type: string
+                  required:
+                  - id
+                  - name
+                  - location
+                  - description
+                  type: object
+                type: array
+              sequence:
+                items:
+                  properties:
+                    description:
+                      type: string
+                    id:
+                      type: string
+                    location:
+                      type: string
+                    order:
+                      type: number
+                    prerequisites:
+                      items:
+                        type: string
+                      type: array
+                    title:
+                      type: string
+                  required:
+                  - id
+                  - title
+                  - order
+                  - description
+                  type: object
+                type: array
+              title:
+                type: string
+              triggers:
+                items:
+                  properties:
+                    actions:
+                      items:
+                        properties:
+                          payload:
+                            type: object
+                          target_id:
+                            type: string
+                          type:
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      type: array
+                    conditions:
+                      items:
+                        properties:
+                          key:
+                            type: string
+                          operator:
+                            type: string
+                          type:
+                            type: string
+                          value:
+                            type: string
+                        required:
+                        - type
+                        - value
+                        type: object
+                      type: array
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    once:
+                      type: boolean
+                  required:
+                  - id
+                  - name
+                  - conditions
+                  - actions
+                  type: object
+                type: array
+              handouts:
+                items:
+                  properties:
+                    add_to_inventory:
+                      type: boolean
+                    asset_ids:
+                      items:
+                        type: string
+                      type: array
+                    content:
+                      type: string
+                    grant_conditions:
+                      items:
+                        type: string
+                      type: array
+                    id:
+                      type: string
+                    title:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - id
+                  - title
+                  - content
+                  - type
+                  type: object
+                type: array
+            required:
+            - title
+            - background
+            - rule_system
+            - tone
+            - core_conflict
+            - locations
+            - npcs
+            - events
+            - quests
+            - sequence
+            - triggers
+            - clues
+            - handouts
+            - scene_items
+            - assets
+            type: object
+        structured_output_enabled: true
+        title: LLM
+        type: llm
+        vision:
+          enabled: false
+      height: 87
+      id: '1772976353362'
+      position:
+        x: 756
+        y: 298
+      positionAbsolute:
+        x: 756
+        y: 298
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data:
+          - id: key-value-43
+            key: ''
+            type: text
+            value: '{{#1772976353362.structured_output#}}'
+          type: json
+        headers: ''
+        method: post
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: HTTP 请求
+        type: http-request
+        url: https://dice-tales-dev.loca.lt/modules/{{#1772976239537.module_id#}}/structured
+        variables: []
+      height: 171
+      id: '1772976454838'
+      position:
+        x: 1086
+        y: 298
+      positionAbsolute:
+        x: 1086
+        y: 298
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    viewport:
+      x: -630
+      y: 40
+      zoom: 1
+  rag_pipeline_variables: []

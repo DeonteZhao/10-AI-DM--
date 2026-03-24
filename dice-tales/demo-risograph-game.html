@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dice Tales - Risograph Game UI 演示</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=VT323&display=swap');
+
+    @font-face {
+      font-family: 'Huiwen Mincho';
+      src: local('Huiwen-mincho'), local('HuiwenMincho-Regular'), local('汇文明朝体');
+      font-weight: normal;
+      font-style: normal;
+    }
+
+    :root {
+      --paper-bg: #D9CBA0;
+      --paper-light: #e6d8b3;
+      --ink-navy: #1f2041;
+      --ink-red: #9e3223;
+      --ink-green: #3a5a40;
+      --ink-blue: #3e5c76;
+    }
+
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      overflow: hidden; /* 防止全局滚动，改为内部滚动 */
+      background-color: var(--paper-bg);
+      color: var(--ink-navy);
+      font-family: 'Huiwen Mincho', 'Noto Serif SC', serif;
+      filter: url(#print-effect);
+    }
+
+    .noise-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.12;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    .rough-edge { filter: url(#rough-edge); }
+
+    /* === 游戏主布局：左右分栏 === */
+    .game-layout {
+      display: flex;
+      height: 100vh;
+      max-width: 1600px;
+      margin: 0 auto;
+      border-left: 2px solid var(--ink-navy);
+      border-right: 2px solid var(--ink-navy);
+    }
+
+    /* === 左侧：聊天记录区 (主剧本) === */
+    .chat-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border-right: 2px dashed var(--ink-navy);
+      position: relative;
+    }
+
+    .chat-header {
+      padding: 15px 30px;
+      border-bottom: 2px solid var(--ink-navy);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: var(--paper-light);
+    }
+
+    .chat-title {
+      font-size: 1.5rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin: 0;
+    }
+
+    .chat-meta {
+      font-size: 0.8rem;
+      font-family: 'VT323', monospace;
+      letter-spacing: 0.1em;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+      gap: 30px;
+    }
+
+    /* 滚动条美化 */
+    .chat-messages::-webkit-scrollbar { width: 8px; }
+    .chat-messages::-webkit-scrollbar-track { border-left: 1px dashed var(--ink-navy); }
+    .chat-messages::-webkit-scrollbar-thumb { background-color: var(--ink-navy); }
+
+    /* 消息气泡基础样式：摒弃气泡，使用段落+标记 */
+    .message {
+      max-width: 85%;
+      position: relative;
+    }
+
+    .msg-dm {
+      align-self: flex-start;
+      padding-left: 20px;
+      border-left: 3px solid var(--ink-navy);
+    }
+
+    .msg-player {
+      align-self: flex-end;
+      padding-right: 20px;
+      border-right: 3px solid var(--ink-red);
+      text-align: right;
+    }
+
+    .msg-sender {
+      font-weight: 900;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .msg-dm .msg-sender { color: var(--ink-navy); }
+    .msg-player .msg-sender { color: var(--ink-red); justify-content: flex-end; }
+
+    .msg-content {
+      font-size: 1.1rem;
+      line-height: 1.8;
+      text-align: justify;
+    }
+
+    .msg-player .msg-content {
+      font-style: italic; /* 玩家说的话用斜体，类似手写批注 */
+    }
+
+    /* 检定请求块 */
+    .check-request {
+      margin-top: 15px;
+      border: 2px solid var(--ink-navy);
+      padding: 15px;
+      background-image: repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(31,32,65,0.05) 10px, rgba(31,32,65,0.05) 11px);
+    }
+
+    .check-title {
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .check-title::before { content: "►"; color: var(--ink-red); }
+
+    .roll-btn {
+      background-color: var(--ink-navy);
+      color: var(--paper-bg);
+      border: none;
+      padding: 8px 20px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: bold;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.2s;
+    }
+    .roll-btn:hover { background-color: var(--ink-red); }
+
+    /* 系统检定结果 */
+    .msg-system {
+      align-self: center;
+      text-align: center;
+      width: 100%;
+      margin: 10px 0;
+    }
+    
+    .system-roll {
+      display: inline-block;
+      font-family: 'VT323', monospace;
+      font-size: 1.2rem;
+      border-top: 1px dashed var(--ink-navy);
+      border-bottom: 1px dashed var(--ink-navy);
+      padding: 5px 20px;
+      letter-spacing: 0.1em;
+    }
+    .roll-success { color: var(--ink-green); }
+    .roll-fail { color: var(--ink-red); }
+
+    /* 输入区 */
+    .input-area {
+      border-top: 2px solid var(--ink-navy);
+      padding: 20px 30px;
+      background-color: var(--paper-light);
+      display: flex;
+      gap: 15px;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid var(--ink-navy);
+      font-family: inherit;
+      font-size: 1.1rem;
+      padding: 10px 5px;
+      color: var(--ink-navy);
+      outline: none;
+      resize: none;
+    }
+    .chat-input::placeholder { color: rgba(31,32,65,0.4); }
+
+    .send-btn {
+      background: transparent;
+      border: 2px solid var(--ink-navy);
+      color: var(--ink-navy);
+      font-family: inherit;
+      font-weight: bold;
+      padding: 0 20px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .send-btn:hover {
+      background-color: var(--ink-navy);
+      color: var(--paper-bg);
+    }
+
+    /* === 右侧：角色状态面板 (附卷) === */
+    .side-panel {
+      width: 350px;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--paper-bg);
+    }
+
+    .panel-header {
+      padding: 15px 20px;
+      border-bottom: 2px solid var(--ink-navy);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      text-align: center;
+      background-color: var(--ink-navy);
+      color: var(--paper-bg);
+    }
+
+    .panel-content {
+      padding: 20px;
+      overflow-y: auto;
+    }
+
+    /* 角色档案简述 */
+    .char-profile {
+      border: 2px solid var(--ink-navy);
+      padding: 15px;
+      margin-bottom: 25px;
+      position: relative;
+    }
+    .char-profile::before, .char-profile::after {
+      content: '+'; position: absolute; font-size: 12px;
+    }
+    .char-profile::before { top: 2px; left: 2px; }
+    .char-profile::after { bottom: 2px; right: 2px; }
+
+    .profile-name { font-size: 1.8rem; font-weight: 900; margin: 0 0 5px 0; line-height: 1; text-transform: uppercase; }
+    .profile-class { font-size: 0.9rem; letter-spacing: 0.1em; opacity: 0.8; }
+
+    /* 状态条 (HP/SAN) */
+    .stat-bar-container { margin-bottom: 15px; }
+    .stat-label { display: flex; justify-content: space-between; font-weight: bold; font-size: 0.85rem; margin-bottom: 5px; letter-spacing: 0.1em; }
+    .stat-bar {
+      height: 12px;
+      border: 2px solid var(--ink-navy);
+      width: 100%;
+      position: relative;
+    }
+    .stat-fill { height: 100%; }
+    .fill-hp { background-color: var(--ink-red); width: 60%; }
+    .fill-san { background-color: var(--ink-blue); width: 85%; }
+    /* 刻度线 */
+    .stat-bar::after {
+      content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background-image: repeating-linear-gradient(90deg, transparent, transparent 10%, var(--ink-navy) 10%, var(--ink-navy) calc(10% + 1px));
+    }
+
+    /* 属性网格 */
+    .attr-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 25px;
+    }
+    .attr-item {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px dashed var(--ink-navy);
+      padding-bottom: 2px;
+    }
+    .attr-name { font-weight: bold; font-size: 0.9rem; }
+    .attr-val { font-family: 'VT323', monospace; font-size: 1.1rem; }
+
+    /* 物品栏 */
+    .inventory-title {
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin: 0 0 10px 0;
+      border-bottom: 2px solid var(--ink-navy);
+      display: inline-block;
+      padding-bottom: 2px;
+    }
+    .inventory-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .inventory-list li {
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(31,32,65,0.2);
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.95rem;
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- SVG 滤镜定义区 -->
+  <svg style="display: none;">
+    <defs>
+      <filter id="rough-edge">
+        <feTurbulence type="fractalNoise" baseFrequency="0.15" numOctaves="3" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+      </filter>
+      <filter id="print-effect">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="0.25" result="blur" />
+      </filter>
+    </defs>
+  </svg>
+
+  <div class="noise-overlay"></div>
+
+  <div class="game-layout">
+    
+    <!-- 左侧：跑团记录区 -->
+    <main class="chat-section">
+      <header class="chat-header rough-edge">
+        <h1 class="chat-title">幽灵古宅 // 调查日志</h1>
+        <div class="chat-meta">REC. 1924-10-31</div>
+      </header>
+
+      <div class="chat-messages">
+        <!-- DM 消息 -->
+        <div class="message msg-dm rough-edge">
+          <div class="msg-sender">Keeper (守秘人)</div>
+          <div class="msg-content">
+            你推开了古宅沉重的大门。空气中弥漫着发霉的纸张和某种难以名状的腐败气味。大厅中央的枝形吊灯已经坠落，碎玻璃散落一地。通向二楼的楼梯在黑暗中若隐若现。<br><br>
+            突然，你听到楼上主卧的方向传来了一阵有节奏的“叩、叩、叩”的敲击声。
+          </div>
+        </div>
+
+        <!-- 玩家消息 -->
+        <div class="message msg-player rough-edge">
+          <div class="msg-sender">亚瑟·柯南</div>
+          <div class="msg-content">
+            我拔出腰间的左轮手枪，深吸一口气，尽量放轻脚步，慢慢向楼梯上走去。我想看看是谁在敲击。
+          </div>
+        </div>
+
+        <!-- DM 要求检定 -->
+        <div class="message msg-dm rough-edge">
+          <div class="msg-sender">Keeper (守秘人)</div>
+          <div class="msg-content">
+            楼梯的木板因为年久失修而变得非常脆弱。如果你想悄无声息地上楼，你需要进行一次潜行检定。
+            
+            <div class="check-request">
+              <div class="check-title">ACTION REQUIRED</div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold;">[潜行] 检定 - 目标值: 40</span>
+                <button class="roll-btn">ROLL D100</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 系统检定结果 -->
+        <div class="message msg-system rough-edge">
+          <div class="system-roll">
+            SYSTEM: 亚瑟·柯南 执行了 [潜行] 检定 (1d100) 🎲 85 / 40 -> <span class="roll-fail">失败</span>
+          </div>
+        </div>
+
+        <!-- DM 判定结果 -->
+        <div class="message msg-dm rough-edge">
+          <div class="msg-sender">Keeper (守秘人)</div>
+          <div class="msg-content">
+            你刚踏上第三级台阶，“咔嚓”一声巨响，木板在你脚下断裂了。你的腿陷了进去，灰尘四起。<br><br>
+            楼上的敲击声戛然而止。死一般的寂静笼罩了整座古宅。接着，你听到了某种沉重的东西在木地板上拖行的声音，正朝着楼梯口靠近...
+          </div>
+        </div>
+      </div>
+
+      <!-- 输入区 -->
+      <div class="input-area rough-edge">
+        <textarea class="chat-input" rows="2" placeholder="你打算怎么做？..."></textarea>
+        <button class="send-btn">记录 / 提交</button>
+      </div>
+    </main>
+
+    <!-- 右侧：调查员档案 -->
+    <aside class="side-panel">
+      <div class="panel-header rough-edge">ATTACHMENT A: INVESTIGATOR</div>
+      <div class="panel-content rough-edge">
+        
+        <div class="char-profile">
+          <h2 class="profile-name">亚瑟·柯南</h2>
+          <div class="profile-class">OCCUPATION: 私家侦探</div>
+        </div>
+
+        <!-- 状态条 -->
+        <div class="stat-bar-container">
+          <div class="stat-label"><span>HIT POINTS (HP)</span> <span>6 / 10</span></div>
+          <div class="stat-bar"><div class="stat-fill fill-hp"></div></div>
+        </div>
+        
+        <div class="stat-bar-container">
+          <div class="stat-label"><span>SANITY (SAN)</span> <span>55 / 65</span></div>
+          <div class="stat-bar"><div class="stat-fill fill-san"></div></div>
+        </div>
+
+        <hr style="border: 0; border-top: 2px solid var(--ink-navy); margin: 20px 0;">
+
+        <!-- 核心属性 -->
+        <h3 class="inventory-title">ATTRIBUTES</h3>
+        <div class="attr-grid">
+          <div class="attr-item"><span class="attr-name">力量 STR</span> <span class="attr-val">60</span></div>
+          <div class="attr-item"><span class="attr-name">敏捷 DEX</span> <span class="attr-val">70</span></div>
+          <div class="attr-item"><span class="attr-name">体质 CON</span> <span class="attr-val">50</span></div>
+          <div class="attr-item"><span class="attr-name">体型 SIZ</span> <span class="attr-val">65</span></div>
+          <div class="attr-item"><span class="attr-name">智力 INT</span> <span class="attr-val">80</span></div>
+          <div class="attr-item"><span class="attr-name">意志 POW</span> <span class="attr-val">65</span></div>
+        </div>
+
+        <!-- 物品栏 -->
+        <h3 class="inventory-title">INVENTORY</h3>
+        <ul class="inventory-list">
+          <li><span>.38左轮手枪</span> <span>x1</span></li>
+          <li><span>子弹 (发)</span> <span>x12</span></li>
+          <li><span>煤油打火机</span> <span>x1</span></li>
+          <li><span>破旧的日记本</span> <span>x1</span></li>
+        </ul>
+
+      </div>
+    </aside>
+
+  </div>
+
+</body>
+</html>

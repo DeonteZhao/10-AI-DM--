@@ -1,0 +1,602 @@
+app:
+  description: ''
+  icon: 🤖
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: advanced-chat
+  name: AI GM/DM
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openrouter:0.0.41@99cd79bc154370c899547ce17cea8edc569e86c06c795d4f8577b5c42eb712c3
+    version: null
+kind: app
+version: 0.6.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 50
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: http-request
+      id: 1772949536401-source-1772950178876-target
+      selected: false
+      source: '1772949536401'
+      sourceHandle: source
+      target: '1772950178876'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 1772950178876-source-1772950629075-target
+      source: '1772950178876'
+      sourceHandle: source
+      target: '1772950629075'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: http-request
+      id: 1772950629075-source-17729502250570-target
+      source: '1772950629075'
+      sourceHandle: source
+      target: '17729502250570'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 17729502250570-source-1772951848199-target
+      source: '17729502250570'
+      sourceHandle: source
+      target: '1772951848199'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInLoop: false
+        sourceType: code
+        targetType: http-request
+      id: 1772951848199-source-17729505618360-target
+      source: '1772951848199'
+      sourceHandle: source
+      target: '17729505618360'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      id: 17729505618360-source-1772952059021-target
+      source: '17729505618360'
+      sourceHandle: source
+      target: '1772952059021'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: llm
+      id: 1772952059021-source-1772952249217-target
+      source: '1772952059021'
+      sourceHandle: source
+      target: '1772952249217'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: http-request
+      id: 1772952249217-source-1772952559715-target
+      source: '1772952249217'
+      sourceHandle: source
+      target: '1772952559715'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: answer
+      id: 1772952559715-source-1772954361550-target
+      source: '1772952559715'
+      sourceHandle: source
+      target: '1772954361550'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        selected: false
+        title: 用户输入
+        type: start
+        variables:
+        - default: ''
+          hint: ''
+          label: session_id
+          options: []
+          placeholder: ''
+          required: true
+          type: text-input
+          variable: session_id
+        - default: ''
+          hint: ''
+          label: location
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: location
+        - default: ''
+          hint: ''
+          label: quest
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: quest
+        - default: ''
+          hint: ''
+          label: game_state
+          options: []
+          placeholder: ''
+          required: false
+          type: json_object
+          variable: game_state
+        - default: ''
+          hint: ''
+          label: player_character
+          options: []
+          placeholder: ''
+          required: false
+          type: json_object
+          variable: player_character
+      height: 212
+      id: '1772949536401'
+      position:
+        x: 80
+        y: 272.9155031364574
+      positionAbsolute:
+        x: 80
+        y: 272.9155031364574
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        headers: ''
+        method: get
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: true
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: HTTP Request：获取 Session
+        type: http-request
+        url: https://api.dice-tales.xyz/sessions/{{#1772949536401.session_id#}}
+        variables: []
+      height: 155
+      id: '1772950178876'
+      position:
+        x: 453.34641050471487
+        y: 267.3905818253444
+      positionAbsolute:
+        x: 453.34641050471487
+        y: 267.3905818253444
+      selected: true
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        headers: ''
+        method: get
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: 获取结构化模组
+        type: http-request
+        url: https://api.dice-tales.xyz/modules/{{#1772950629075.module_id#}}/structured
+        variables: []
+      height: 171
+      id: '17729502250570'
+      position:
+        x: 1171.0025752923063
+        y: 286.33692030390534
+      positionAbsolute:
+        x: 1171.0025752923063
+        y: 286.33692030390534
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        headers: ''
+        method: get
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: 获取 Session State
+        type: http-request
+        url: https://api.dice-tales.xyz/sessions/{{#1772949536401.session_id#}}/state
+        variables: []
+      height: 171
+      id: '17729505618360'
+      position:
+        x: 1943.8551404412813
+        y: 293.9155031364574
+      positionAbsolute:
+        x: 1943.8551404412813
+        y: 293.9155031364574
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        code: "import json\n\ndef main(response_body: str):\n    try:\n        data\
+          \ = json.loads(response_body)\n        session = data.get(\"session\", {})\n\
+          \        \n        return {\n            \"module_id\": session.get(\"module_id\"\
+          )\n        }\n    except Exception as e:\n        return {\n           \
+          \ \"module_id\": \"\",\n            \"error\": str(e)\n        }"
+        code_language: python3
+        outputs:
+          module_id:
+            children: null
+            type: string
+        selected: false
+        title: 获取module id
+        type: code
+        variables:
+        - value_selector:
+          - '1772950178876'
+          - body
+          value_type: string
+          variable: response_body
+      height: 51
+      id: '1772950629075'
+      position:
+        x: 821.7355496206368
+        y: 286.33692030390534
+      positionAbsolute:
+        x: 821.7355496206368
+        y: 286.33692030390534
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        code: "import json\n\ndef main(module_body: str):\n    try:\n        data\
+          \ = json.loads(module_body)\n        module_obj = data.get(\"module\", {})\n\
+          \        # 必须把对象 dumps 为字符串\n        return {\n            \"result\": json.dumps(module_obj,\
+          \ ensure_ascii=False)\n        }\n    except Exception as e:\n        return\
+          \ {\"result\": \"\", \"error\": str(e)}"
+        code_language: python3
+        outputs:
+          result:
+            children: null
+            type: string
+        selected: false
+        title: 解析结构化模组
+        type: code
+        variables:
+        - value_selector:
+          - '17729502250570'
+          - body
+          value_type: string
+          variable: module_body
+      height: 51
+      id: '1772951848199'
+      position:
+        x: 1554.860437581165
+        y: 293.9155031364574
+      positionAbsolute:
+        x: 1554.860437581165
+        y: 293.9155031364574
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        code: "import json\n\ndef main(state_body: str):\n    try:\n        data =\
+          \ json.loads(state_body)\n        state = data.get(\"state\", {})\n    \
+          \    messages = data.get(\"messages\", [])\n        \n        # 只返回字符串类型的变量\n\
+          \        return {\n            \"state_text\": json.dumps(state, ensure_ascii=False),\n\
+          \            \"messages_text\": json.dumps(messages, ensure_ascii=False)\n\
+          \        }\n    except Exception as e:\n        return {\n            \"\
+          state_text\": \"{}\", \n            \"messages_text\": \"[]\", \n      \
+          \      \"error\": str(e)\n        }"
+        code_language: python3
+        outputs:
+          messages_text:
+            children: null
+            type: string
+          state_text:
+            children: null
+            type: string
+        selected: false
+        title: 解析 State
+        type: code
+        variables:
+        - value_selector:
+          - '17729505618360'
+          - body
+          value_type: string
+          variable: state_body
+      height: 51
+      id: '1772952059021'
+      position:
+        x: 2243.237920812205
+        y: 293.9155031364574
+      positionAbsolute:
+        x: 2243.237920812205
+        y: 293.9155031364574
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          completion_params:
+            temperature: 0.7
+          mode: chat
+          name: anthropic/claude-3.5-sonnet
+          provider: langgenius/openrouter/openrouter
+        prompt_template:
+        - id: 00673846-0fc8-4ba3-bdf6-2def111de859
+          role: system
+          text: '你是TRPG的DM。严格遵守规则：
+
+            1 优先使用模组中的事件和剧情。
+
+            2 不要创造新的主要剧情。
+
+            3 可以创造细节描述。
+
+            4 如果玩家行为脱离模组，创造合理的过渡剧情。
+
+            5 绝对不能改变模组核心结局。
+
+            6 输出必须为JSON。
+
+            7 不允许修改模组核心设定或新增主线任务。
+
+
+            输入数据：
+
+            - 模组：{{#1772951848199.result#}}
+
+            - 会话状态：{{#1772952059021.state_text#}}
+
+            - 最近对话：{{#1772952059021.messages_text#}}
+
+            - 玩家动作：{{#sys.query#}}'
+        selected: false
+        structured_output:
+          schema:
+            properties:
+              choices:
+                items:
+                  type: string
+                type: array
+              location_change:
+                type:
+                - string
+                - 'null'
+              narration:
+                type: string
+              quest_update:
+                type:
+                - string
+                - 'null'
+              state_update:
+                type: object
+            required:
+            - narration
+            - choices
+            - state_update
+            - location_change
+            - quest_update
+            type: object
+        structured_output_enabled: true
+        title: LLM
+        type: llm
+        vision:
+          enabled: false
+      height: 87
+      id: '1772952249217'
+      position:
+        x: 2643.345284131436
+        y: 318.7141179001549
+      positionAbsolute:
+        x: 2643.345284131436
+        y: 318.7141179001549
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data:
+          - id: key-value-821
+            key: ''
+            type: text
+            value: "{\n  \"session_id\": \"{{#1772949536401.session_id#}}\",\n  \"\
+              player_action\": \"{{#1772949536401.quest#}}\",\n  \"result\": {{#1772952249217.structured_output#}}\n\
+              }"
+          type: json
+        headers: ''
+        method: post
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+        title: 回写结果
+        type: http-request
+        url: https://api.dice-tales.xyz/gm/action/external
+        variables: []
+      height: 136
+      id: '1772952559715'
+      position:
+        x: 2947.173711139326
+        y: 318.7141179001549
+      positionAbsolute:
+        x: 2947.173711139326
+        y: 318.7141179001549
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    - data:
+        answer: '{{#1772952249217.structured_output#}}'
+        selected: false
+        title: 直接回复
+        type: answer
+        variables: []
+      height: 102
+      id: '1772954361550'
+      position:
+        x: 3245.345284131436
+        y: 318.7141179001549
+      positionAbsolute:
+        x: 3245.345284131436
+        y: 318.7141179001549
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 241
+    viewport:
+      x: -742.5123286944292
+      y: 76.4979899187856
+      zoom: 0.707106810400516
+  rag_pipeline_variables: []

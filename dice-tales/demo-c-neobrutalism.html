@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>方案 C - 新粗野主义 (Neo-Brutalism)</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=VT323&family=Noto+Sans+SC:wght@400;700;900&display=swap');
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'VT323', 'Noto Sans SC', monospace;
+      /* 浅灰色背景 + 像素网格（跑团桌垫感） */
+      background-color: #f4f4f5;
+      background-image: 
+        linear-gradient(#e5e7eb 2px, transparent 2px),
+        linear-gradient(90deg, #e5e7eb 2px, transparent 2px);
+      background-size: 40px 40px;
+      color: #000000; /* 全局默认黑色 */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      /* 模拟我们喜欢的黄色箭头光标 */
+      cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' fill='%23ffcc00' stroke='%23000000' stroke-width='2' stroke-linejoin='round'%3E%3Cpolygon points='3 3 11 22 14 14 22 11 3 3'/%3E%3C/svg%3E") 3 3, auto;
+    }
+
+    /* 模拟现有的 Navbar 样式 */
+    nav {
+      width: 100%;
+      height: 64px;
+      background-color: #ffffff;
+      border-bottom: 4px solid #000000;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 2rem;
+      box-sizing: border-box;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .nav-brand {
+      font-size: 1.25rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .nav-brand .icon-box {
+      background-color: #000;
+      color: #ffcc00;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-link {
+      padding: 8px 16px;
+      font-weight: 900;
+      text-transform: uppercase;
+      border: 2px solid transparent;
+      cursor: pointer;
+    }
+
+    .nav-link.active {
+      background-color: #3e7eff;
+      color: #ffffff;
+      border: 2px solid #000;
+      box-shadow: 2px 2px 0 #000;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      padding: 3rem 2rem;
+      box-sizing: border-box;
+    }
+
+    /* 标题：纯黑 + 亮色硬阴影（不死板，极高对比度） */
+    h1 {
+      font-size: 3.5rem;
+      color: #000000;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0;
+      margin-bottom: 2.5rem;
+      /* 鲜艳的黄色硬阴影，体现活力 */
+      text-shadow: 4px 4px 0 #ffcc00, 5px 5px 0 #000; 
+      line-height: 1.2;
+    }
+
+    h2 {
+      font-size: 2rem;
+      color: #000000;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      /* 蓝色的小阴影 */
+      text-shadow: 2px 2px 0 #3e7eff;
+    }
+
+    h2::before {
+      content: "";
+      display: inline-block;
+      width: 16px;
+      height: 32px;
+      background-color: #ff3e3e;
+      border: 3px solid #000;
+      box-shadow: 3px 3px 0 #000;
+    }
+
+    /* 面板：纯白底 + 黑粗框 + 硬阴影 */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+    }
+
+    .card {
+      background-color: #ffffff;
+      border: 4px solid #000000;
+      border-radius: 8px;
+      padding: 1.5rem;
+      /* 标志性的新粗野主义厚重阴影 */
+      box-shadow: 8px 8px 0 #000000;
+      transition: all 0.15s ease-out;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 8px;
+      border-bottom: 4px solid #000;
+      background-color: #ffcc00; /* 顶部装饰条 */
+      border-radius: 4px 4px 0 0;
+    }
+    
+    .card.blue-top::before { background-color: #3e7eff; }
+    .card.green-top::before { background-color: #00b800; }
+
+    /* Q弹交互：向上浮起，阴影变大 */
+    .card:hover {
+      transform: translate(-4px, -4px);
+      box-shadow: 12px 12px 0 #000000;
+    }
+
+    .card:active {
+      transform: translate(2px, 2px);
+      box-shadow: 2px 2px 0 #000000;
+    }
+
+    .card h3 {
+      margin: 15px 0 10px 0;
+      color: #000000;
+      font-size: 1.75rem;
+      font-weight: 900;
+    }
+
+    .card p {
+      color: #4b5563;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      margin: 0;
+      font-weight: 700;
+    }
+
+    .tag {
+      display: inline-block;
+      background-color: #ffffff;
+      color: #000000;
+      padding: 6px 12px;
+      font-size: 0.9rem;
+      font-weight: 900;
+      border: 3px solid #000;
+      border-radius: 4px;
+      margin-top: 20px;
+      box-shadow: 3px 3px 0 #000;
+      text-transform: uppercase;
+    }
+
+    .tag.primary {
+      background-color: #ffcc00;
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- 模拟 Navbar -->
+  <nav>
+    <div class="nav-brand">
+      <div class="icon-box">⚔️</div>
+      TRPG Solo
+    </div>
+    <div class="nav-links">
+      <div class="nav-link active">首页</div>
+      <div class="nav-link">模组</div>
+      <div class="nav-link">我的角色</div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1>欢迎回来，冒险者</h1>
+    
+    <h2>我的冒险</h2>
+    <div class="card-grid" style="margin-bottom: 4rem;">
+      <div class="card">
+        <h3>暗夜邪教 (进行中)</h3>
+        <p>理智值正在流失...你必须在下个满月前找到真相，否则一切都将太迟。</p>
+        <div class="tag primary">继续游戏 →</div>
+      </div>
+    </div>
+
+    <h2>入门模组</h2>
+    <div class="card-grid">
+      <div class="card blue-top">
+        <h3>冰封疫病</h3>
+        <p>艾森瓦尔德的冰雪覆盖之地，一种神秘的疾病正在蔓延。追溯源头，深入洞穴。</p>
+        <div class="tag">DND 5E</div>
+      </div>
+      <div class="card green-top">
+        <h3>幽灵古宅</h3>
+        <p>1920年代的新英格兰，一座维多利亚式古宅传出怪异的声响。调查不可名状的恐怖。</p>
+        <div class="tag">COC 7版</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

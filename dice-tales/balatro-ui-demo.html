@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRPG Solo - Balatro Style UI Demo</title>
+    <style>
+        /* ====================
+           Core Variables & Reset
+           ==================== */
+        :root {
+            --bg-color: #2c3e50; /* Fallback */
+            --crt-bg: #1a1c2c;
+            --card-bg: #e0e0e0;
+            --card-border: #2d2d2d;
+            --text-main: #333;
+            --text-light: #f4f4f4;
+            --accent-red: #ff3e3e;
+            --accent-blue: #3e7eff;
+            --accent-gold: #ffcc00;
+            --accent-orange: #ff7b00;
+            --shadow-hard: 4px 4px 0px rgba(0,0,0,0.8);
+            --font-retro: 'IBM Plex Sans JP', 'Courier New', Courier, monospace;
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Sans+JP:wght@400;700&display=swap');
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'VT323', var(--font-retro);
+            background-color: var(--crt-bg);
+            background-image: 
+                radial-gradient(circle at 50% 50%, #2a2d42 0%, #111 100%);
+            color: var(--text-light);
+            min-height: 100vh;
+            overflow-x: hidden;
+            font-size: 20px;
+            padding-bottom: 50px;
+        }
+
+        /* ====================
+           CRT & FX Overlays
+           ==================== */
+        .crt-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: 
+                linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 0.8;
+        }
+
+        .scanline {
+            width: 100%;
+            height: 100px;
+            z-index: 9999;
+            background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(255, 255, 255, 0.1) 50%, rgba(0,0,0,0) 100%);
+            opacity: 0.1;
+            position: absolute;
+            bottom: 100%;
+            animation: scanline 10s linear infinite;
+            pointer-events: none;
+        }
+
+        @keyframes scanline {
+            0% { bottom: 100%; }
+            100% { bottom: -100px; }
+        }
+
+        /* ====================
+           Layout & Typography
+           ==================== */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            position: relative;
+            z-index: 1;
+        }
+
+        h1, h2, h3 {
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 2px 2px 0px #000;
+        }
+
+        h1 {
+            font-size: 4rem;
+            text-align: center;
+            margin-bottom: 10px;
+            color: var(--accent-gold);
+            text-shadow: 4px 4px 0px #8b0000;
+            transform: rotate(-2deg);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #aaa;
+            margin-bottom: 60px;
+            font-size: 1.5rem;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        /* ====================
+           Icons (SVG)
+           ==================== */
+        .icon {
+            width: 1em;
+            height: 1em;
+            display: inline-block;
+            vertical-align: middle;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .icon-lg {
+            width: 4rem;
+            height: 4rem;
+            stroke-width: 1.5;
+        }
+
+        .icon-md {
+            width: 2rem;
+            height: 2rem;
+        }
+
+        /* ====================
+           Card Styles
+           ==================== */
+        .big-actions {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 80px;
+            flex-wrap: wrap;
+        }
+
+        .action-card {
+            background: var(--card-bg);
+            width: 300px;
+            height: 420px;
+            border-radius: 16px;
+            border: 4px solid var(--card-border);
+            padding: 10px;
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: pointer;
+            box-shadow: 
+                0 0 0 4px #444,
+                0 10px 20px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            color: var(--text-main);
+            overflow: hidden;
+        }
+
+        .action-card:hover {
+            transform: translateY(-20px) rotate(2deg) scale(1.05);
+            box-shadow: 
+                0 0 0 4px var(--accent-gold),
+                0 20px 40px rgba(0,0,0,0.6);
+            z-index: 10;
+        }
+
+        .action-card:nth-child(even):hover {
+            transform: translateY(-20px) rotate(-2deg) scale(1.05);
+        }
+
+        .card-inner {
+            border: 2px dashed #999;
+            border-radius: 8px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background: #f4f4f4;
+        }
+
+        .card-icon-wrapper {
+            margin-bottom: 20px;
+            color: #333;
+            filter: drop-shadow(2px 2px 0px rgba(0,0,0,0.2));
+        }
+
+        .action-card:hover .card-icon-wrapper {
+            color: var(--accent-red);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        .card-title {
+            font-size: 2rem;
+            color: #000;
+            text-align: center;
+            line-height: 1;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+
+        .card-desc {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: center;
+            margin-top: auto;
+            line-height: 1.2;
+        }
+
+        .badge {
+            position: absolute;
+            top: 25px;
+            right: -30px;
+            background: var(--accent-red);
+            color: white;
+            padding: 5px 40px;
+            transform: rotate(45deg);
+            font-size: 1.2rem;
+            border: 2px solid white;
+            box-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+            z-index: 5;
+        }
+
+        /* ====================
+           Module List
+           ==================== */
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            border-bottom: 4px solid var(--accent-blue);
+            padding-bottom: 10px;
+            width: fit-content;
+        }
+
+        .section-title {
+            font-size: 2.5rem;
+            color: var(--accent-blue);
+            margin: 0;
+        }
+
+        .module-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 60px;
+        }
+
+        .module-card {
+            background: #fff;
+            border-radius: 10px;
+            border: 3px solid #000;
+            overflow: hidden;
+            transition: transform 0.2s;
+            position: relative;
+            box-shadow: 4px 4px 0px #000;
+            cursor: pointer;
+        }
+
+        .module-card:hover {
+            transform: translate(-2px, -2px);
+            box-shadow: 6px 6px 0px var(--accent-orange);
+        }
+
+        .module-image {
+            height: 140px;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 2rem;
+            border-bottom: 3px solid #000;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .pixel-art-placeholder {
+            width: 100%;
+            height: 100%;
+            background-color: #3b3b58;
+            background-image: 
+                linear-gradient(45deg, #444 25%, transparent 25%, transparent 75%, #444 75%, #444), 
+                linear-gradient(45deg, #444 25%, transparent 25%, transparent 75%, #444 75%, #444);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+            opacity: 0.5;
+            position: absolute;
+            top: 0; left: 0;
+        }
+        
+        .module-icon-overlay {
+            position: relative;
+            z-index: 2;
+            color: white;
+            filter: drop-shadow(2px 2px 0 #000);
+        }
+
+        .module-content {
+            padding: 10px;
+        }
+
+        .module-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #000;
+            margin-bottom: 5px;
+        }
+
+        .module-tags {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .tag {
+            font-size: 0.8rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid #000;
+            font-weight: bold;
+        }
+
+        .tag.dnd { background: #ffcccc; color: #8b0000; }
+        .tag.coc { background: #ccffcc; color: #004d00; }
+
+        /* ====================
+           Game Interface Demo
+           ==================== */
+        .game-demo {
+            border: 4px solid var(--card-border);
+            background: #111;
+            border-radius: 12px;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+            height: 500px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+        }
+
+        .char-panel {
+            background: #222;
+            border: 2px solid #444;
+            padding: 15px;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            border-bottom: 1px dashed #444;
+            padding-bottom: 2px;
+        }
+
+        .stat-val { color: var(--accent-gold); }
+
+        .chat-area {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+
+        .msg {
+            padding: 10px 15px;
+            border-radius: 8px;
+            max-width: 80%;
+            position: relative;
+            line-height: 1.4;
+        }
+
+        .msg.dm {
+            align-self: flex-start;
+            background: #2a2a4e;
+            border: 2px solid #444;
+            color: #ddd;
+        }
+
+        .msg.dm::before {
+            content: "DM";
+            position: absolute;
+            top: -10px;
+            left: 10px;
+            background: #000;
+            color: var(--accent-gold);
+            font-size: 0.8rem;
+            padding: 0 5px;
+            border: 1px solid var(--accent-gold);
+        }
+
+        .msg.player {
+            align-self: flex-end;
+            background: #3e2a2a;
+            border: 2px solid var(--accent-red);
+            color: #fff;
+        }
+
+        .dice-roll {
+            background: #000;
+            border: 1px solid var(--accent-gold);
+            padding: 5px 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+        }
+        
+        .dice-icon {
+            color: var(--accent-gold);
+        }
+
+        /* Glitch Animation */
+        .glitch {
+            position: relative;
+            color: white;
+        }
+        .glitch::before,
+        .glitch::after {
+            content: attr(data-text);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .glitch::before {
+            left: 2px;
+            text-shadow: -1px 0 #ff00c1;
+            clip: rect(44px, 450px, 56px, 0);
+            animation: glitch-anim 5s infinite linear alternate-reverse;
+        }
+        .glitch::after {
+            left: -2px;
+            text-shadow: -1px 0 #00fff9;
+            clip: rect(44px, 450px, 56px, 0);
+            animation: glitch-anim2 5s infinite linear alternate-reverse;
+        }
+
+        @keyframes glitch-anim {
+            0% { clip: rect(10px, 9999px, 30px, 0); }
+            20% { clip: rect(80px, 9999px, 100px, 0); }
+            40% { clip: rect(10px, 9999px, 50px, 0); }
+            60% { clip: rect(40px, 9999px, 60px, 0); }
+            80% { clip: rect(20px, 9999px, 30px, 0); }
+            100% { clip: rect(70px, 9999px, 90px, 0); }
+        }
+        @keyframes glitch-anim2 {
+            0% { clip: rect(60px, 9999px, 70px, 0); }
+            20% { clip: rect(10px, 9999px, 20px, 0); }
+            40% { clip: rect(30px, 9999px, 60px, 0); }
+            60% { clip: rect(50px, 9999px, 80px, 0); }
+            80% { clip: rect(20px, 9999px, 40px, 0); }
+            100% { clip: rect(10px, 9999px, 30px, 0); }
+        }
+
+        /* ====================
+           Navigation & View Switching
+           ==================== */
+        .view {
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .view.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .back-btn {
+            background: none;
+            border: none;
+            color: var(--accent-gold);
+            font-family: inherit;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .back-btn:hover {
+            color: #fff;
+            text-shadow: 0 0 5px var(--accent-gold);
+        }
+
+        /* Form Styles for Create Character */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--accent-blue);
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px;
+            background: #222;
+            border: 2px solid #444;
+            color: white;
+            font-family: inherit;
+            font-size: 1rem;
+        }
+        .form-input:focus {
+            border-color: var(--accent-gold);
+            outline: none;
+        }
+        .btn-primary {
+            background: var(--accent-red);
+            color: white;
+            border: 2px solid white;
+            padding: 10px 30px;
+            font-family: inherit;
+            font-size: 1.2rem;
+            cursor: pointer;
+            box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+            transition: transform 0.1s;
+        }
+        .btn-primary:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0 rgba(0,0,0,0.5);
+        }
+
+    </style>
+</head>
+<body>
+    <div class="crt-overlay"></div>
+    <div class="scanline"></div>
+
+    <div class="container">
+        
+        <!-- View: Home -->
+        <div id="view-home" class="view active">
+            <!-- Hero Section -->
+            <h1 class="glitch" data-text="TRPG SOLO">TRPG SOLO</h1>
+            <p class="subtitle">选择你的命运</p>
+
+            <div class="big-actions">
+                <!-- Start Adventure Card -->
+                <div class="action-card" onclick="navigateTo('modules')">
+                    <div class="badge">开始</div>
+                    <div class="card-inner">
+                        <div class="card-icon-wrapper">
+                            <!-- Lucide: Sword -->
+                            <svg class="icon icon-lg" viewBox="0 0 24 24">
+                                <line x1="14.5" y1="17.5" x2="3" y2="6"></line>
+                                <line x1="3" y1="3" x2="6" y2="6"></line>
+                                <line x1="3" y1="3" x2="3.5" y2="3.5"></line>
+                                <path d="M11.5 11.5L21 21"></path>
+                                <path d="M16 16l4 4"></path>
+                                <path d="M19 21l2-2"></path>
+                            </svg>
+                        </div>
+                        <div class="card-title">冒险模式</div>
+                        <div class="card-desc">
+                            选择一个模组，立即开始你的旅程。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Character Card -->
+                <div class="action-card" onclick="navigateTo('create-character')">
+                    <div class="card-inner">
+                        <div class="card-icon-wrapper">
+                            <!-- Lucide: UserPlus -->
+                            <svg class="icon icon-lg" viewBox="0 0 24 24">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="8.5" cy="7" r="4"></circle>
+                                <line x1="20" y1="8" x2="20" y2="14"></line>
+                                <line x1="23" y1="11" x2="17" y2="11"></line>
+                            </svg>
+                        </div>
+                        <div class="card-title">创建角色</div>
+                        <div class="card-desc">
+                            打造属于你的英雄，定制属性与背景故事。
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- View: Modules List -->
+        <div id="view-modules" class="view">
+            <button class="back-btn" onclick="navigateTo('home')">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                返回主菜单
+            </button>
+
+            <div class="section-header">
+                <!-- Lucide: BookOpen -->
+                <svg class="icon icon-md" viewBox="0 0 24 24" style="color: var(--accent-blue);">
+                    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+                </svg>
+                <h2 class="section-title">可用模组</h2>
+            </div>
+
+            <div class="module-grid">
+                <!-- Module 1 -->
+                <div class="module-card" onclick="navigateTo('game')">
+                    <div class="module-image">
+                        <div class="pixel-art-placeholder"></div>
+                        <div class="module-icon-overlay">
+                            <!-- Lucide: Mountain (placeholder for mine) -->
+                            <svg class="icon icon-md" viewBox="0 0 24 24">
+                                <path d="m8 3 4 8 5-5 5 15H2L8 3z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="module-content">
+                        <div class="module-tags">
+                            <span class="tag dnd">D&D 5E</span>
+                            <span class="tag">等级 1-5</span>
+                        </div>
+                        <div class="module-title">凡代林失落矿坑</div>
+                    </div>
+                </div>
+                
+                <!-- Module 2 -->
+                <div class="module-card" onclick="navigateTo('game')">
+                    <div class="module-image">
+                        <div class="pixel-art-placeholder"></div>
+                        <div class="module-icon-overlay">
+                            <!-- Lucide: Ghost -->
+                            <svg class="icon icon-md" viewBox="0 0 24 24">
+                                <path d="M9 10h.01"></path>
+                                <path d="M15 10h.01"></path>
+                                <path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="module-content">
+                        <div class="module-tags">
+                            <span class="tag coc">COC 7版</span>
+                            <span class="tag">恐怖</span>
+                        </div>
+                        <div class="module-title">鬼屋 (The Haunting)</div>
+                    </div>
+                </div>
+
+                <!-- Module 3 -->
+                <div class="module-card" onclick="navigateTo('game')">
+                    <div class="module-image">
+                        <div class="pixel-art-placeholder"></div>
+                        <div class="module-icon-overlay">
+                             <!-- Lucide: Flame (Dragon breath) -->
+                             <svg class="icon icon-md" viewBox="0 0 24 24">
+                                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.1.2-2.2.5-3.3.3-1.12.8-2.22 1.5-3.2.9 1 2.5 2 2 4.5z"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="module-content">
+                        <div class="module-tags">
+                            <span class="tag dnd">D&D 5E</span>
+                            <span class="tag">史诗</span>
+                        </div>
+                        <div class="module-title">巨龙暴政</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- View: Create Character -->
+        <div id="view-create-character" class="view">
+            <button class="back-btn" onclick="navigateTo('home')">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                返回主菜单
+            </button>
+
+            <div class="section-header">
+                <svg class="icon icon-md" viewBox="0 0 24 24" style="color: var(--accent-red);">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="8.5" cy="7" r="4"></circle>
+                </svg>
+                <h2 class="section-title">创建新角色</h2>
+            </div>
+
+            <div style="background: var(--card-bg); border: 4px solid var(--card-border); padding: 20px; border-radius: 12px; color: #333; max-width: 600px;">
+                <div class="form-group">
+                    <label class="form-label" style="color: #333; font-weight: bold;">角色姓名</label>
+                    <input type="text" class="form-input" style="background: white; color: #333;" placeholder="输入姓名...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" style="color: #333; font-weight: bold;">种族</label>
+                    <select class="form-input" style="background: white; color: #333;">
+                        <option>人类</option>
+                        <option>精灵</option>
+                        <option>矮人</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" style="color: #333; font-weight: bold;">职业</label>
+                    <select class="form-input" style="background: white; color: #333;">
+                        <option>战士</option>
+                        <option>法师</option>
+                        <option>盗贼</option>
+                    </select>
+                </div>
+                <button class="btn-primary" onclick="navigateTo('game')">开始冒险</button>
+            </div>
+        </div>
+
+        <!-- View: Game Interface -->
+        <div id="view-game" class="view">
+            <button class="back-btn" onclick="navigateTo('modules')">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                退出冒险
+            </button>
+
+            <div class="section-header">
+                <!-- Phosphor: DiceFive (Simulated) -->
+                <svg class="icon icon-md" viewBox="0 0 256 256" style="color: var(--accent-gold);">
+                    <rect x="32" y="32" width="192" height="192" rx="24" fill="none" stroke="currentColor" stroke-width="16"></rect>
+                    <circle cx="80" cy="80" r="12" fill="currentColor"></circle>
+                    <circle cx="176" cy="80" r="12" fill="currentColor"></circle>
+                    <circle cx="128" cy="128" r="12" fill="currentColor"></circle>
+                    <circle cx="80" cy="176" r="12" fill="currentColor"></circle>
+                    <circle cx="176" cy="176" r="12" fill="currentColor"></circle>
+                </svg>
+                <h2 class="section-title">凡代林失落矿坑</h2>
+            </div>
+
+            <div class="game-demo">
+                <!-- Sidebar -->
+                <div class="char-panel">
+                    <h3 style="color: var(--accent-blue); margin-bottom: 15px; border-bottom: 2px solid white;">状态</h3>
+                    <div class="stat-row"><span>生命值</span> <span class="stat-val" style="color: #ff3e3e">24/30</span></div>
+                    <div class="stat-row"><span>魔法值</span> <span class="stat-val" style="color: #3e7eff">12/12</span></div>
+                    <div class="stat-row"><span>力量</span> <span class="stat-val">16 (+3)</span></div>
+                    <div class="stat-row"><span>敏捷</span> <span class="stat-val">14 (+2)</span></div>
+                    <div class="stat-row"><span>智力</span> <span class="stat-val">10 (+0)</span></div>
+                    
+                    <br>
+                    <h3 style="color: var(--accent-gold); margin-bottom: 15px; border-bottom: 2px solid white;">背包</h3>
+                    <div style="font-size: 0.9rem; line-height: 1.5;">
+                        > 短剑<br>
+                        > 皮甲<br>
+                        > 治疗药水 (x2)
+                    </div>
+                </div>
+
+                <!-- Main Chat -->
+                <div class="chat-area">
+                    <div class="msg dm">
+                        你走进了昏暗的酒馆。空气中弥漫着烟雾和陈年麦酒的味道。一个戴着兜帽的身影坐在角落里，注视着你。
+                    </div>
+                    
+                    <div class="msg player">
+                        我想接近那个身影，问问他是否见过失踪的商人。
+                    </div>
+
+                    <div class="dice-roll">
+                        <!-- Phosphor: DiceFive (Simulated) -->
+                        <svg class="icon" viewBox="0 0 256 256">
+                            <rect x="32" y="32" width="192" height="192" rx="24" fill="none" stroke="currentColor" stroke-width="16"></rect>
+                            <circle cx="80" cy="80" r="12" fill="currentColor"></circle>
+                            <circle cx="176" cy="80" r="12" fill="currentColor"></circle>
+                            <circle cx="128" cy="128" r="12" fill="currentColor"></circle>
+                            <circle cx="80" cy="176" r="12" fill="currentColor"></circle>
+                            <circle cx="176" cy="176" r="12" fill="currentColor"></circle>
+                        </svg>
+                        <span>说服检定:</span>
+                        <span style="color: var(--accent-gold); font-weight: bold;">15</span>
+                        <span style="color: #0f0;">(成功)</span>
+                    </div>
+
+                    <div class="msg dm">
+                        那人抬起头，露出一张布满伤痕的脸。“那个商人？”他沙哑地说道，“没错，我看见他往旧遗迹的方向去了……”
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function navigateTo(viewId) {
+            // Hide all views
+            document.querySelectorAll('.view').forEach(el => {
+                el.classList.remove('active');
+            });
+            // Show target view
+            document.getElementById('view-' + viewId).classList.add('active');
+        }
+    </script>
+</body>
+</html>

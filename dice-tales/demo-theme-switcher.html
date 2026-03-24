@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dice Tales - Theme Switcher Demo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap');
+
+    @font-face {
+      font-family: 'Huiwen Mincho';
+      src: local('Huiwen-mincho'), local('HuiwenMincho-Regular'), local('汇文明朝体');
+      font-weight: normal;
+      font-style: normal;
+    }
+
+    /* === 主题变量定义 === */
+
+    /* 1. 首页中立枢纽 (Neutral / Hub) */
+    :root, [data-theme="hub"] {
+      --paper-bg: #EAE6DF;     /* 更冷、更干净的浅灰色牛皮纸，代表未被特定世界渲染的空白状态 */
+      --paper-light: #F5F2EC;
+      --ink-main: #2C2C2C;     /* 极深的炭灰色，接近黑但不是纯黑 */
+      --ink-accent-1: #8B8B8B; /* 中性灰，用于次要信息 */
+      --ink-accent-2: #2C2C2C; /* 保持中立 */
+      --theme-name: "DICE TALES // HUB";
+    }
+
+    /* 2. COC 机密档案 (Investigation / Horror) */
+    [data-theme="coc"] {
+      --paper-bg: #D9CBA0;     /* 偏黄绿的卡其纸色，陈旧感 */
+      --paper-light: #e6d8b3;
+      --ink-main: #1f2041;     /* 核心：深邃海军蓝 */
+      --ink-accent-1: #9e3223; /* 褪色红印泥 */
+      --ink-accent-2: #3a5a40; /* 橄榄绿 */
+      --theme-name: "BUREAU OF INVESTIGATION";
+    }
+
+    /* 3. DND 冒险者公会 (Fantasy / Adventure) */
+    [data-theme="dnd"] {
+      --paper-bg: #E8D8B0;     /* 偏暖黄的羊皮纸色 */
+      --paper-light: #F4E8C8;
+      --ink-main: #4A3B32;     /* 核心：深棕色/焦茶色 */
+      --ink-accent-1: #B8860B; /* 暗金色/黄铜色 */
+      --ink-accent-2: #8B0000; /* 龙血红 */
+      --theme-name: "ADVENTURER'S GUILD";
+    }
+
+    /* === 基础样式 === */
+    body, html {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background-color: var(--paper-bg);
+      color: var(--ink-main);
+      font-family: 'Huiwen Mincho', 'Noto Serif SC', serif;
+      filter: url(#print-effect);
+      transition: background-color 0.5s ease, color 0.5s ease;
+    }
+
+    .noise-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.12;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    .rough-edge { filter: url(#rough-edge); }
+
+    /* === UI 组件 === */
+    nav {
+      border-bottom: 2px solid var(--ink-main);
+      padding: 15px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.5s ease;
+    }
+
+    .nav-brand {
+      font-size: 1.5rem;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .nav-brand::after {
+      content: var(--theme-name);
+      margin-left: 10px;
+      opacity: 0.8;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 60px 40px;
+    }
+
+    h1 {
+      font-size: 3.5rem;
+      font-weight: 900;
+      margin: 0 0 40px 0;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 40px;
+    }
+
+    /* 通用卡片样式 */
+    .card {
+      border: 2px solid var(--ink-main);
+      padding: 30px;
+      position: relative;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background-color: transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .card::before, .card::after {
+      content: '+';
+      position: absolute;
+      color: var(--ink-main);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .card::before { top: 5px; left: 5px; }
+    .card::after { bottom: 5px; right: 5px; }
+
+    .card:hover {
+      background-color: var(--paper-light);
+      transform: translateY(-4px);
+      box-shadow: 8px 8px 0 var(--ink-main);
+    }
+
+    .card-icon {
+      font-size: 4rem;
+      margin-bottom: 20px;
+      filter: grayscale(1) sepia(1) hue-rotate(var(--icon-hue, 0deg)) saturate(3) brightness(0.6);
+    }
+
+    [data-theme="coc"] .card-icon { --icon-hue: 200deg; } /* 蓝 */
+    [data-theme="dnd"] .card-icon { --icon-hue: 30deg; }  /* 棕/金 */
+
+    .card-title {
+      font-size: 2rem;
+      font-weight: 900;
+      margin: 0 0 15px 0;
+      letter-spacing: 0.1em;
+    }
+
+    .card-desc {
+      font-size: 1.1rem;
+      line-height: 1.6;
+      opacity: 0.8;
+      margin: 0;
+    }
+
+    /* 主题切换控制台 (仅供演示) */
+    .theme-controls {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 15px;
+      background: var(--paper-bg);
+      padding: 10px 20px;
+      border: 2px dashed var(--ink-main);
+      z-index: 1000;
+    }
+
+    .theme-btn {
+      background: transparent;
+      border: 2px solid var(--ink-main);
+      color: var(--ink-main);
+      padding: 8px 15px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .theme-btn:hover {
+      background: var(--ink-main);
+      color: var(--paper-bg);
+    }
+
+  </style>
+</head>
+<body data-theme="hub">
+
+  <svg style="display: none;">
+    <defs>
+      <filter id="rough-edge">
+        <feTurbulence type="fractalNoise" baseFrequency="0.15" numOctaves="3" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+      </filter>
+      <filter id="print-effect">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="0.3" result="blur" />
+      </filter>
+    </defs>
+  </svg>
+
+  <div class="noise-overlay"></div>
+
+  <nav class="rough-edge">
+    <div class="nav-brand"></div>
+    <div style="font-weight: bold; letter-spacing: 0.1em;">SYSTEM: ONLINE</div>
+  </nav>
+
+  <div class="container">
+    <h1 class="rough-edge" id="main-title">选择你的命运</h1>
+    
+    <div class="grid">
+      <!-- DND 入口 -->
+      <div class="card rough-edge" onclick="setTheme('dnd')">
+        <div class="card-icon">⚔️</div>
+        <h2 class="card-title">进入剑湾</h2>
+        <p class="card-desc">加入冒险者公会，接取委托，在龙与地下城的世界中谱写史诗。</p>
+        <div style="margin-top: 20px; font-weight: bold; color: var(--ink-accent-1); border-bottom: 2px solid currentColor;">ACCESS D&D 5E</div>
+      </div>
+
+      <!-- COC 入口 -->
+      <div class="card rough-edge" onclick="setTheme('coc')">
+        <div class="card-icon">👁️</div>
+        <h2 class="card-title">查阅机密</h2>
+        <p class="card-desc">化身调查员，翻开尘封的档案，直面隐藏在黑暗中的不可名状之物。</p>
+        <div style="margin-top: 20px; font-weight: bold; color: var(--ink-accent-1); border-bottom: 2px solid currentColor;">ACCESS COC 7TH</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 演示用控制器 -->
+  <div class="theme-controls rough-edge">
+    <span style="align-self: center; font-weight: bold; font-size: 0.8rem;">TEST THEME:</span>
+    <button class="theme-btn" onclick="setTheme('hub')">首页 (HUB)</button>
+    <button class="theme-btn" onclick="setTheme('dnd')">DND (棕/黄)</button>
+    <button class="theme-btn" onclick="setTheme('coc')">COC (蓝/红)</button>
+  </div>
+
+  <script>
+    function setTheme(theme) {
+      document.body.setAttribute('data-theme', theme);
+      
+      const title = document.getElementById('main-title');
+      if(theme === 'hub') title.innerText = '选择你的命运';
+      if(theme === 'dnd') title.innerText = '公会委托板';
+      if(theme === 'coc') title.innerText = '最高机密档案';
+    }
+  </script>
+
+</body>
+</html>

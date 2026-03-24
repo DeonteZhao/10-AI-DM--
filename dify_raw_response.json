@@ -1,0 +1,16 @@
+{
+  "task_id": "6d2bfc6b-d7c0-4828-ba5a-172b364ee7be",
+  "workflow_run_id": "a6691394-1684-462a-9d0d-b0e0d458f482",
+  "data": {
+    "id": "a6691394-1684-462a-9d0d-b0e0d458f482",
+    "workflow_id": "bf928d76-403e-4204-9a81-a1d80327c1c3",
+    "status": "succeeded",
+    "outputs": {},
+    "error": null,
+    "elapsed_time": 7.645961,
+    "total_tokens": 29740,
+    "total_steps": 4,
+    "created_at": 1774278602,
+    "finished_at": 1774278610
+  }
+}

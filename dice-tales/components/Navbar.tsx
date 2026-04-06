@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sword, User, House, MagnifyingGlass, BookBookmark } from "@phosphor-icons/react";
+import { Sword, User, MagnifyingGlass, BookBookmark } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 
 export function Navbar() {

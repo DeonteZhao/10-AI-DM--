@@ -9,7 +9,21 @@ type ModuleRow = {
   name: string;
   description: string;
   has_structured: boolean;
+  has_draft: boolean;
   schema_version: number | null;
+  status: string;
+  draft_updated_at?: string | null;
+  version_count: number;
+  latest_import?: {
+    task_id: string;
+    status: string;
+    status_label: string;
+    stage_label: string;
+    result_source_label?: string | null;
+    error_label?: string | null;
+    output_summary?: string | null;
+    updated_at: string;
+  } | null;
 };
 
 export default function AdminModulesPage() {
@@ -48,10 +62,30 @@ export default function AdminModulesPage() {
             <div className="text-lg font-semibold text-amber-300">{row.name}</div>
             <div className="mt-1 text-xs text-slate-400">{row.id}</div>
             <p className="mt-2 line-clamp-3 text-sm text-slate-200">{row.description || "暂无描述"}</p>
-            <div className="mt-3 flex items-center gap-2 text-xs text-slate-300">
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-300">
               <span>{row.has_structured ? "已结构化" : "未结构化"}</span>
+              <span>{row.has_draft ? "有草稿" : "无草稿"}</span>
               <span>schema: {row.schema_version ?? "-"}</span>
+              <span>版本: {row.version_count}</span>
+              {row.latest_import && <span>导入: {row.latest_import.status_label}</span>}
             </div>
+            {row.draft_updated_at && (
+              <div className="mt-2 text-xs text-slate-400">草稿更新时间：{row.draft_updated_at}</div>
+            )}
+            {row.latest_import && (
+              <div className="mt-2 rounded bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                <div>{row.latest_import.stage_label}</div>
+                <div className="mt-1 text-slate-400">
+                  来源：{row.latest_import.result_source_label || "-"} · 最近更新：{row.latest_import.updated_at}
+                </div>
+                {row.latest_import.error_label && (
+                  <div className="mt-1 text-red-300">失败来源：{row.latest_import.error_label}</div>
+                )}
+                {row.latest_import.output_summary && (
+                  <div className="mt-1 text-slate-400">{row.latest_import.output_summary}</div>
+                )}
+              </div>
+            )}
             <Link
               href={`/admin/modules/${row.id}/edit`}
               className="mt-3 inline-block rounded bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-500"

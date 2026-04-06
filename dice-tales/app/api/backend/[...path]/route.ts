@@ -5,14 +5,21 @@ const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://127.0.0.1:8000'
 async function proxy(request: NextRequest, path: string[]) {
   const search = request.nextUrl.search || '';
   const targetUrl = `${BACKEND_BASE_URL}/${path.join('/')}${search}`;
-  const headers = new Headers(request.headers);
-  headers.delete('host');
+  const headers = new Headers();
+  for (const [key, value] of request.headers.entries()) {
+    const lowerKey = key.toLowerCase();
+    if (['content-type', 'authorization', 'accept', 'cookie'].includes(lowerKey)) {
+      headers.set(key, value);
+    }
+  }
   const init: RequestInit = {
     method: request.method,
     headers
   };
   if (!['GET', 'HEAD'].includes(request.method)) {
-    init.body = await request.text();
+    const body = await request.arrayBuffer();
+    init.body = Buffer.from(body);
+    (init as RequestInit & { duplex?: 'half' }).duplex = 'half';
   }
   const upstream = await fetch(targetUrl, init);
   const responseHeaders = new Headers(upstream.headers);

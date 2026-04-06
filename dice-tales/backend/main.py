@@ -3,133 +3,50 @@ from datetime import datetime
 import json
 import os
 import sqlite3
-from typing import Literal, Dict, Any
+import zipfile
+import xml.etree.ElementTree as ET
+from typing import Any, Awaitable, Callable, Dict, Literal
 from uuid import uuid4
+from zipfile import ZipFile
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env.local'))
 
 import httpx
 import fitz
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from backend.domain.coc.core import (
+  ActionRequest,
+  AdminAssetCreate,
+  CharacterCreate,
+  CheckResolutionRequest,
+  CocCheckRequest,
+  CocCheckResult,
+  CocAsset,
+  CocChatMessage,
+  CocClue,
+  CocHandout,
+  CocLocation,
+  CocNpc,
+  CocQuest,
+  CocScenario,
+  CocScene,
+  CocSceneItem,
+  CocTriggerAction,
+  CocTriggerCondition,
+  CocTriggerRule,
+  ExternalActionRequest,
+  ModulePublishRequest,
+  Role,
+  SessionCreate,
+  SkillCheck,
+  XPUpdate,
+)
+from backend.seed_coc_scenario import MODULE_ID as BASELINE_MODULE_ID, write_seed_scenario_to_system
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse, JSONResponse
 
 # --- DND Rules Constants ---
-DND_LEVEL_XP = {
-    1: 0,
-    2: 100,
-    3: 300,
-    4: 600,
-    5: 1000,
-    6: 1500,
-    7: 2100,
-    8: 2800,
-    9: 3600,
-    10: 4500
-}
-
-DND_CLASS_CONFIG = {
-    "战士": {
-        "hit_die": 10,
-        "hp_base": 12, # 12 + CON
-        "hp_level": 6,  # Average d10 (5.5->6) + CON
-        "features": {
-            1: "战斗风格（+1攻击）",
-            2: "额外攻击（每回合2次攻击）",
-            3: "战技（例如击退敌人）",
-            4: "属性+2",
-            5: "武器精通（伤害+2）",
-            6: "HP+5",
-            7: "战斗反击",
-            8: "属性+2",
-            9: "暴击范围19-20",
-            10: "传奇战士（攻击+2）"
-        },
-        "default_equipment": [
-            {"item_ref_id": "base_longsword", "name": "长剑", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 1, "description": "一把标准的精钢长剑。", "stats": {"damage": "1d8"}},
-            {"item_ref_id": "base_chainmail", "name": "链甲", "category": "armor", "origin": "base", "is_equipped": True, "quantity": 1, "description": "金属环编织的重型护甲。", "stats": {"ac_bonus": 16}},
-            {"item_ref_id": "base_adventurer_pack", "name": "冒险者背袋", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "包含火把、口粮和绳索的旅行背包。", "stats": {}}
-        ]
-    },
-    "法师": {
-        "hit_die": 6,
-        "hp_base": 6, # 6 + CON
-        "hp_level": 4, # Average d6 (3.5->4) + CON
-        "features": {
-            1: "2个法术",
-            2: "3个法术",
-            3: "法术强化（伤害+2）",
-            4: "属性+2",
-            5: "AOE法术",
-            6: "魔力恢复",
-            7: "高级法术",
-            8: "属性+2",
-            9: "双重施法",
-            10: "大法师（法术伤害+4）"
-        },
-        "default_equipment": [
-            {"item_ref_id": "base_quarterstaff", "name": "法杖", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 1, "description": "结实的木制法杖。", "stats": {"damage": "1d6"}},
-            {"item_ref_id": "base_scholar_pack", "name": "学者背袋", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "包含羊皮纸、墨水和卷轴轴筒的背包。", "stats": {}}
-        ]
-    },
-    "盗贼": {
-        "hit_die": 8,
-        "hp_base": 8, # 8 + CON
-        "hp_level": 5, # Average d8 (4.5->5) + CON
-        "features": {
-            1: "潜行专家",
-            2: "偷袭（+1d6伤害）",
-            3: "闪避",
-            4: "属性+2",
-            5: "偷袭+2d6",
-            6: "快速移动",
-            7: "背刺（暴击+50%伤害）",
-            8: "属性+2",
-            9: "影遁",
-            10: "暗影大师（偷袭+3d6）"
-        },
-        "default_equipment": [
-            {"item_ref_id": "base_dagger", "name": "匕首", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 2, "description": "锋利的短兵器，适合暗杀。", "stats": {"damage": "1d4"}},
-            {"item_ref_id": "base_leather_armor", "name": "皮甲", "category": "armor", "origin": "base", "is_equipped": True, "quantity": 1, "description": "轻便的皮制护甲。", "stats": {"ac_bonus": 11}},
-            {"item_ref_id": "base_thieves_tools", "name": "盗贼工具", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "包含开锁器和小镜子的工具包。", "stats": {}}
-        ]
-    },
-    "牧师": {
-        "hit_die": 8,
-        "hp_base": 8,
-        "hp_level": 5,
-        "features": { 1: "神术" },
-        "default_equipment": [
-            {"item_ref_id": "base_mace", "name": "战锤", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 1, "description": "沉重的钝器。", "stats": {"damage": "1d6"}},
-            {"item_ref_id": "base_scale_mail", "name": "鳞甲", "category": "armor", "origin": "base", "is_equipped": True, "quantity": 1, "description": "金属鳞片制成的护甲。", "stats": {"ac_bonus": 14}},
-            {"item_ref_id": "base_holy_symbol", "name": "圣徽", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "施展神术的焦点。", "stats": {}}
-        ]
-    },
-    "游侠": {
-        "hit_die": 10,
-        "hp_base": 10,
-        "hp_level": 6,
-        "features": { 1: "宿敌" },
-        "default_equipment": [
-            {"item_ref_id": "base_longbow", "name": "长弓", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 1, "description": "射程极远的弓。", "stats": {"damage": "1d8"}},
-            {"item_ref_id": "base_arrows", "name": "箭矢", "category": "consumable", "origin": "base", "is_equipped": False, "quantity": 20, "description": "普通的箭矢。", "stats": {}},
-            {"item_ref_id": "base_leather_armor", "name": "皮甲", "category": "armor", "origin": "base", "is_equipped": True, "quantity": 1, "description": "轻便的皮制护甲。", "stats": {"ac_bonus": 11}}
-        ]
-    },
-    "术士": {
-        "hit_die": 6,
-        "hp_base": 6,
-        "hp_level": 4,
-        "features": { 1: "术法起源" },
-        "default_equipment": [
-            {"item_ref_id": "base_dagger", "name": "匕首", "category": "weapon", "origin": "base", "is_equipped": True, "quantity": 1, "description": "防身用的短兵器。", "stats": {"damage": "1d4"}},
-            {"item_ref_id": "base_arcane_focus", "name": "奥术焦点", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "施展法术的焦点。", "stats": {}}
-        ]
-    }
-}
-
 COC_OCCUPATION_CONFIG = {
     "默认": [
         {"item_ref_id": "base_flashlight", "name": "手电筒", "category": "tool", "origin": "base", "is_equipped": False, "quantity": 1, "description": "普通的便携光源。", "stats": {}},
@@ -148,240 +65,6 @@ COC_OCCUPATION_CONFIG = {
     ]
 }
 
-Role = Literal["ai", "player"]
-
-
-class ModuleInfo(BaseModel):
-  name: str
-  description: str
-  tags: list[str]
-
-
-class Location(BaseModel):
-  id: str
-  name: str
-  description: str
-  connected_locations: list[str]
-
-
-class Npc(BaseModel):
-  id: str
-  name: str
-  location: str
-  description: str
-
-
-class Quest(BaseModel):
-  id: str
-  title: str
-  description: str
-  objective: str
-
-
-class Item(BaseModel):
-  id: str
-  name: str
-  description: str
-
-
-class Event(BaseModel):
-  trigger: str
-  result: str
-
-
-class Module(BaseModel):
-  id: str
-  module_info: ModuleInfo
-  locations: list[Location]
-  npcs: list[Npc]
-  quests: list[Quest]
-  items: list[Item]
-  events: list[Event]
-
-
-class SensoryDetails(BaseModel):
-  visual: str | None = None
-  auditory: str | None = None
-  olfactory: str | None = None
-
-class StructuredLocation(BaseModel):
-  name: str
-  description: str
-  connections: list[str]
-  npcs: list[str]
-  sensory_details: SensoryDetails | None = None
-  tactical_elements: str | None = None
-  hidden_treasures: str | None = None
-  atmosphere: str | None = None
-  hidden_clues: str | None = None
-
-
-class StructuredNpc(BaseModel):
-  name: str
-  description: str
-  secrets: str | None = None
-  personality: str | None = None
-  appearance: str | None = None
-  alignment: str | None = None
-  combat_behavior: str | None = None
-  secrets_and_lies: str | None = None
-  sanity_state: str | None = None
-
-
-class StructuredEvent(BaseModel):
-  trigger: str
-  result: str
-  consequences: str | None = None
-  encounter_type: str | None = None
-  sanity_check_trigger: str | None = None
-
-
-class StructuredQuest(BaseModel):
-  name: str
-  goal: str
-
-
-class StructuredSequenceStep(BaseModel):
-  id: str
-  title: str
-  location: str | None = None
-  order: int
-  description: str
-  prerequisites: list[str] = Field(default_factory=list)
-
-
-class StructuredTriggerCondition(BaseModel):
-  type: Literal["location", "action", "state", "check_result"]
-  key: str | None = None
-  operator: Literal["eq", "contains"] = "eq"
-  value: str
-
-
-class StructuredTriggerAction(BaseModel):
-  type: Literal["reveal_clue", "grant_handout", "update_state"]
-  target_id: str | None = None
-  payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class StructuredTriggerRule(BaseModel):
-  id: str
-  name: str
-  once: bool = True
-  conditions: list[StructuredTriggerCondition] = Field(default_factory=list)
-  actions: list[StructuredTriggerAction] = Field(default_factory=list)
-
-
-class StructuredClue(BaseModel):
-  id: str
-  title: str
-  content: str
-  source: str | None = None
-  discovery_conditions: list[str] = Field(default_factory=list)
-  sanity_cost: str | None = None
-  mythos_knowledge: bool | None = None
-
-
-class StructuredHandout(BaseModel):
-  id: str
-  title: str
-  content: str
-  type: Literal["text", "image", "mixed"] = "text"
-  asset_ids: list[str] = Field(default_factory=list)
-  grant_conditions: list[str] = Field(default_factory=list)
-  add_to_inventory: bool = True
-
-
-class StructuredSceneItem(BaseModel):
-  id: str
-  name: str
-  location: str
-  description: str
-  interactions: list[str] = Field(default_factory=list)
-  linked_clue_ids: list[str] = Field(default_factory=list)
-  magical_properties: str | None = None
-
-
-class StructuredAsset(BaseModel):
-  id: str
-  name: str
-  type: Literal["image", "map", "document", "other"] = "image"
-  url: str = ""
-  description: str = ""
-
-
-class StructuredModule(BaseModel):
-  rule_system: Literal["dnd", "coc"] = "dnd"
-  tone: str | None = None
-  core_conflict: str | None = None
-  title: str
-  background: str
-  locations: list[StructuredLocation] = Field(default_factory=list)
-  npcs: list[StructuredNpc] = Field(default_factory=list)
-  events: list[StructuredEvent] = Field(default_factory=list)
-  quests: list[StructuredQuest] = Field(default_factory=list)
-  schema_version: int = 2
-  sequence: list[StructuredSequenceStep] = Field(default_factory=list)
-  triggers: list[StructuredTriggerRule] = Field(default_factory=list)
-  clues: list[StructuredClue] = Field(default_factory=list)
-  handouts: list[StructuredHandout] = Field(default_factory=list)
-  scene_items: list[StructuredSceneItem] = Field(default_factory=list)
-  assets: list[StructuredAsset] = Field(default_factory=list)
-
-
-class AdminAssetCreate(BaseModel):
-  id: str | None = None
-  name: str
-  type: Literal["image", "map", "document", "other"] = "image"
-  url: str = ""
-  description: str = ""
-
-
-class CharacterCreate(BaseModel):
-  id: str | None = None
-  name: str
-  type: Literal["dnd", "coc"]
-  race: str | None = None
-  class_: str | None = Field(default=None, alias="class")
-  occupation: str | None = None
-  age: int | None = None
-  stats: dict[str, int]
-  skills: list[str] | dict[str, int]
-  items: list[dict]
-  backstory: str | None = None
-
-class XPUpdate(BaseModel):
-  xp_delta: int
-
-class SkillCheck(BaseModel):
-  skill_name: str
-  success: bool
-
-class SessionCreate(BaseModel):
-  module_id: str
-  character_id: str
-  user_id: str | None = None
-
-
-class ActionRequest(BaseModel):
-  session_id: str
-  message: str
-  location: str | None = None
-  quest: str | None = None
-  game_state: dict | None = None
-  player_character: dict | None = None
-
-
-class ExternalActionRequest(BaseModel):
-  session_id: str
-  player_action: str
-  result: dict | str
-
-
-class ChatMessage(BaseModel):
-  role: Role
-  content: str
-
-
 app = FastAPI()
 app.add_middleware(
   CORSMiddleware,
@@ -394,295 +77,195 @@ app.add_middleware(
 storage_dir = os.getenv("MODULE_STORAGE_DIR", os.path.join(os.path.dirname(__file__), "storage"))
 os.makedirs(storage_dir, exist_ok=True)
 
-modules: dict[str, Module] = {}
-structured_modules: dict[str, StructuredModule] = {}
+IMPORT_STATUS_LABELS = {
+  "uploaded": "上传成功",
+  "processing": "处理中",
+  "completed": "处理完成",
+  "failed": "处理失败"
+}
+
+IMPORT_STAGE_LABELS = {
+  "upload_received": "文件已上传，等待后台处理",
+  "dify_uploading": "正在上传文件到 Dify",
+  "dify_running": "正在等待 Dify Workflow 结果",
+  "fallback_extracting": "正在提取文档文本",
+  "fallback_running": "正在执行 fallback 结构化",
+  "normalizing": "正在标准化结构化结果",
+  "draft_saving": "正在写入 draft 与版本快照",
+  "completed": "draft 已生成，可继续编辑",
+  "failed": "处理失败"
+}
+
+IMPORT_ERROR_LABELS = {
+  "dify_upload_failed": "Dify 上传失败",
+  "dify_workflow_failed": "Dify 执行失败",
+  "structured_result_unrecognized": "结构化结果不可识别",
+  "backend_normalization_failed": "后端标准化失败",
+  "fallback_processing_failed": "Fallback 处理失败",
+  "publish_validation_failed": "发布校验失败"
+}
+
+IMPORT_RESULT_SOURCE_LABELS = {
+  "dify": "Dify Workflow",
+  "openrouter": "OpenRouter 解析",
+  "openrouter_fallback": "Fallback 解析"
+}
+
+UNSET = object()
+
+
+class ImportPipelineError(Exception):
+  def __init__(
+    self,
+    error_type: str,
+    message: str,
+    stage: str,
+    source: str,
+    raw_payload: Any = None,
+    fallback_allowed: bool = False
+  ):
+    super().__init__(message)
+    self.error_type = error_type
+    self.message = message
+    self.stage = stage
+    self.source = source
+    self.raw_payload = raw_payload
+    self.fallback_allowed = fallback_allowed
+
+structured_modules: dict[str, CocScenario] = {}
+draft_modules: dict[str, CocScenario] = {}
 characters: dict[str, dict] = {}
 sessions: dict[str, dict] = {}
-game_logs: dict[str, list[ChatMessage]] = {}
-session_states: dict[str, dict] = {}
+session_logs: dict[str, list[CocChatMessage]] = {}
 ws_clients: dict[str, set[WebSocket]] = {}
-
-modules_data = [
-  {
-    "id": "lost_mine",
-    "module_info": {
-      "name": "失落的矿坑",
-      "description": "矿井入口阴影重重，失踪矿工与古老线索交织。",
-      "tags": ["DND", "中土风", "冒险", "战斗"]
-    },
-    "locations": [
-      {
-        "id": "loc_road",
-        "name": "崔波镇外的商道",
-        "description": "破损马车倒在路边，周围散落着矿工的工具。",
-        "connected_locations": ["loc_town", "loc_mine_entrance"]
-      },
-      {
-        "id": "loc_town",
-        "name": "崔波镇",
-        "description": "镇民人心惶惶，旅店老板暗中观察来客。",
-        "connected_locations": ["loc_road", "loc_mine_entrance"]
-      },
-      {
-        "id": "loc_mine_entrance",
-        "name": "旧矿坑入口",
-        "description": "洞口被塌方掩盖，隐约传来窸窣声。",
-        "connected_locations": ["loc_road", "loc_town", "loc_mine_depths"]
-      },
-      {
-        "id": "loc_mine_depths",
-        "name": "矿坑深处",
-        "description": "黑暗中藏着哥布林的营地与古老符文。",
-        "connected_locations": ["loc_mine_entrance"]
-      }
-    ],
-    "npcs": [
-      {
-        "id": "npc_innkeeper",
-        "name": "埃尔达·奥克",
-        "location": "loc_town",
-        "description": "旅店老板，知道矿工最后一次出现的位置。"
-      },
-      {
-        "id": "npc_guard",
-        "name": "里昂·铁盾",
-        "location": "loc_road",
-        "description": "镇卫兵，怀疑哥布林劫掠但缺乏证据。"
-      }
-    ],
-    "quests": [
-      {
-        "id": "quest_rescue",
-        "title": "寻找失踪矿工",
-        "description": "追踪矿工失踪的线索，确定他们的去向。",
-        "objective": "进入矿坑并找到矿工遗留下来的证据。"
-      },
-      {
-        "id": "quest_clear",
-        "title": "清理矿坑入口",
-        "description": "清理塌方障碍，打开通往深处的道路。",
-        "objective": "清除入口封锁并安全进入矿坑深处。"
-      }
-    ],
-    "items": [
-      {
-        "id": "item_pickaxe",
-        "name": "矿工镐",
-        "description": "磨损严重，但仍能用来撬开碎石。"
-      },
-      {
-        "id": "item_map",
-        "name": "旧矿坑地图",
-        "description": "标注了矿坑通道和一处被涂抹的房间。"
-      }
-    ],
-    "events": [
-      {
-        "trigger": "玩家在商道附近调查马车",
-        "result": "发现被切断的缰绳，指向哥布林埋伏的痕迹。"
-      },
-      {
-        "trigger": "玩家进入矿坑深处",
-        "result": "遭遇哥布林哨兵，触发战斗。"
-      }
-    ]
-  },
-  {
-    "id": "coc_misty_town",
-    "module_info": {
-      "name": "迷雾镇的午夜低语",
-      "description": "调查迷雾镇连续失踪案，揭开教堂地窖中的古老秘密。",
-      "tags": ["CoC", "悬疑", "探案", "恐怖"]
-    },
-    "locations": [
-      {
-        "id": "loc_town_square",
-        "name": "镇中心广场",
-        "description": "喷泉干涸，公告栏贴着失踪者名单。",
-        "connected_locations": ["loc_church", "loc_inn", "loc_forest_edge"]
-      },
-      {
-        "id": "loc_church",
-        "name": "圣玛利亚教堂",
-        "description": "古老石墙布满苔藓，地窖入口被木板封死。",
-        "connected_locations": ["loc_town_square", "loc_graveyard"]
-      },
-      {
-        "id": "loc_inn",
-        "name": "雾鸦旅馆",
-        "description": "旅馆老板消息灵通，深夜常有陌生人出入。",
-        "connected_locations": ["loc_town_square"]
-      },
-      {
-        "id": "loc_forest_edge",
-        "name": "黑松林入口",
-        "description": "林中常有低语，通向废弃的旧矿坑。",
-        "connected_locations": ["loc_town_square", "loc_old_mine"]
-      },
-      {
-        "id": "loc_graveyard",
-        "name": "旧墓园",
-        "description": "墓碑残缺，最近多出几座新坟。",
-        "connected_locations": ["loc_church"]
-      },
-      {
-        "id": "loc_old_mine",
-        "name": "旧矿坑",
-        "description": "洞口塌方，空气中混杂着古怪的腥味。",
-        "connected_locations": ["loc_forest_edge"]
-      }
-    ],
-    "npcs": [
-      {
-        "id": "npc_innkeeper_coc",
-        "name": "艾琳·布莱克",
-        "location": "loc_inn",
-        "description": "旅馆老板，表面热情，知道失踪者最后出现的时间。"
-      },
-      {
-        "id": "npc_priest_coc",
-        "name": "格雷修士",
-        "location": "loc_church",
-        "description": "神情焦虑，否认教堂地窖存在异常。"
-      },
-      {
-        "id": "npc_hunter_coc",
-        "name": "马库斯·雷德",
-        "location": "loc_forest_edge",
-        "description": "镇外猎人，声称在林中见过怪影。"
-      }
-    ],
-    "quests": [
-      {
-        "id": "quest_missing",
-        "title": "追查失踪者",
-        "description": "收集线索，确认失踪者最后出现的地点。",
-        "objective": "找出失踪案的共同点并锁定嫌疑范围。"
-      },
-      {
-        "id": "quest_church",
-        "title": "调查教堂地窖",
-        "description": "突破封锁，进入教堂地窖寻找异常来源。",
-        "objective": "发现地窖中的仪式痕迹或秘密入口。"
-      },
-      {
-        "id": "quest_mine",
-        "title": "深入旧矿坑",
-        "description": "追踪林中低语来源，进入旧矿坑深处。",
-        "objective": "找到导致失踪事件的真相。"
-      }
-    ],
-    "items": [
-      {
-        "id": "item_old_key",
-        "name": "锈蚀钥匙",
-        "description": "刻着教堂徽记，能打开地窖木门。"
-      },
-      {
-        "id": "item_torn_note",
-        "name": "破碎纸条",
-        "description": "写着“午夜前别进墓园”的潦草字迹。"
-      },
-      {
-        "id": "item_lantern",
-        "name": "铜制提灯",
-        "description": "照明范围有限，但耐风。"
-      }
-    ],
-    "events": [
-      {
-        "trigger": "玩家在镇中心广场询问失踪者线索",
-        "result": "公告栏背后发现被撕掉的教堂捐赠记录。"
-      },
-      {
-        "trigger": "玩家试图进入教堂地窖",
-        "result": "格雷修士出现阻止，并暗示墓园里有更重要的线索。"
-      },
-      {
-        "trigger": "玩家在旧矿坑深处停留超过十分钟",
-        "result": "低语声变为尖啸，触发一次恐惧检定。"
-      }
-    ]
-  },
-  {
-    "id": "dnd-frozen-sick",
-    "module_info": {
-      "name": "冰封疫病",
-      "description": "在艾森瓦尔德的冰雪覆盖之地，一种神秘的疾病正在蔓延。冒险者们必须追溯疫病源头，深入危机四伏的冰封洞穴。",
-      "tags": ["DND", "入门", "冒险", "探索"]
-    },
-    "locations": [
-      {
-        "id": "town",
-        "name": "艾登镇",
-        "description": "一个宁静的小镇，最近被神秘事件所困扰。",
-        "connected_locations": ["tavern", "market", "library", "outskirts"]
-      },
-      {
-        "id": "tavern",
-        "name": "醉龙酒馆",
-        "description": "镇上最热闹的酒馆，冒险者聚集之地。",
-        "connected_locations": ["town"]
-      },
-      {
-        "id": "market",
-        "name": "集市广场",
-        "description": "各种商贩聚集之处，可以买到补给品。",
-        "connected_locations": ["town"]
-      },
-      {
-        "id": "library",
-        "name": "古老图书馆",
-        "description": "存放着许多古籍的图书馆，也许有关于疫病的记载。",
-        "connected_locations": ["town"]
-      },
-      {
-        "id": "outskirts",
-        "name": "镇外荒野",
-        "description": "艾登镇周围的荒野地带，寒风呼啸。",
-        "connected_locations": ["town", "cave", "forest"]
-      },
-      {
-        "id": "cave",
-        "name": "冰封洞穴",
-        "description": "传说中疫病源头所在，洞口结满了奇怪的蓝色冰晶。",
-        "connected_locations": ["outskirts"]
-      },
-      {
-        "id": "forest",
-        "name": "迷雾森林",
-        "description": "充满危险的森林，视野极差。",
-        "connected_locations": ["outskirts"]
-      }
-    ],
-    "npcs": [
-      {
-        "id": "npc_mayor",
-        "name": "镇长",
-        "location": "town",
-        "description": "忧心忡忡的镇长，希望能有人解决这场灾难。"
-      }
-    ],
-    "quests": [
-      {
-        "id": "q1",
-        "title": "追查疫病源头",
-        "description": "调查艾登镇附近蔓延的神秘疾病",
-        "objective": "找到源头并解决它"
-      }
-    ],
-    "items": [],
-    "events": []
-  }
-]
-
-for item in modules_data:
-  module = Module.model_validate(item)
-  modules[module.id] = module
-
 
 def db_path() -> str:
   return os.path.join(storage_dir, "modules.db")
+
+
+def location_ref(location: CocLocation) -> str:
+  return location.id or location.name
+
+
+def scene_location_ref(scene: CocScene) -> str | None:
+  return scene.location_id
+
+
+def get_published_scenario(module_id: str) -> CocScenario | None:
+  return structured_modules.get(module_id)
+
+
+def list_published_scenarios() -> list[CocScenario]:
+  return [structured_modules[module_id] for module_id in sorted(structured_modules.keys())]
+
+
+def list_visible_published_scenarios() -> list[CocScenario]:
+  module = structured_modules.get(BASELINE_MODULE_ID)
+  return [module] if module else []
+
+
+def list_visible_sessions() -> list[dict[str, Any]]:
+  return [
+    session
+    for session in sessions.values()
+    if (session.get("scenario_id") or session.get("module_id")) == BASELINE_MODULE_ID
+  ]
+
+
+def serialize_admin_session(session: dict[str, Any]) -> dict[str, Any]:
+  return {
+    "id": session.get("id"),
+    "user_id": session.get("user_id"),
+    "module_id": session.get("module_id") or session.get("scenario_id"),
+    "character_id": session.get("character_id") or session.get("investigator_id"),
+    "status": session.get("status") or "active",
+    "created_at": session.get("created_at") or session.get("started_at"),
+    "updated_at": session.get("updated_at")
+  }
+
+
+def build_module_summary(module: CocScenario) -> dict[str, Any]:
+  return {
+    "id": module.module_id or "",
+    "name": module.title,
+    "type": module.rule_system,
+    "description": module.background,
+    "difficulty": "自定义",
+    "players": "单人",
+    "image": "",
+    "publisher": module.source_type or "system",
+    "price": "免费",
+    "tags": module.themes or ["COC"]
+  }
+
+
+def build_status_track(current: int, maximum: int) -> dict[str, int]:
+  return {
+    "current": current,
+    "maximum": maximum,
+  }
+
+
+def normalize_inventory_items(raw_inventory: Any) -> list[dict[str, Any]]:
+  if not isinstance(raw_inventory, list):
+    return []
+  normalized: list[dict[str, Any]] = []
+  for index, raw_item in enumerate(raw_inventory):
+    if not isinstance(raw_item, dict):
+      continue
+    normalized.append({
+      "id": raw_item.get("id") or f"item_{index}",
+      "name": raw_item.get("name") or "未知物品",
+      "description": raw_item.get("description") or "",
+      "category": raw_item.get("category") or "tool",
+      "origin": raw_item.get("origin") or "custom",
+      "quantity": raw_item.get("quantity") or 1,
+      "is_equipped": bool(raw_item.get("is_equipped")),
+      "stats": raw_item.get("stats") if isinstance(raw_item.get("stats"), dict) else {},
+      "linked_clue_id": raw_item.get("linked_clue_id"),
+    })
+  return normalized
+
+
+def normalize_character_record(raw_character: dict[str, Any]) -> dict[str, Any]:
+  profile = raw_character.get("profile") if isinstance(raw_character.get("profile"), dict) else {}
+  characteristics = raw_character.get("characteristics") if isinstance(raw_character.get("characteristics"), dict) else {}
+  normalized_profile = {
+    "name": profile.get("name") or "无名调查员",
+    "occupation": profile.get("occupation"),
+    "age": profile.get("age"),
+    "residence": profile.get("residence"),
+    "birthplace": profile.get("birthplace"),
+    "avatar": profile.get("avatar") or "🕵️",
+    "backstory": profile.get("backstory"),
+  }
+  pow_value = characteristics.get("pow") or 0
+  raw_status = raw_character.get("status") if isinstance(raw_character.get("status"), dict) else {}
+  default_hp = max(1, ((characteristics.get("con") or 0) + (characteristics.get("siz") or 0)) // 10)
+  default_mp = max(0, pow_value // 5)
+  default_san = max(0, pow_value)
+  hp_track = raw_status.get("hp") if isinstance(raw_status.get("hp"), dict) else build_status_track(default_hp, default_hp)
+  mp_track = raw_status.get("mp") if isinstance(raw_status.get("mp"), dict) else build_status_track(default_mp, default_mp)
+  san_track = raw_status.get("san") if isinstance(raw_status.get("san"), dict) else build_status_track(default_san, default_san)
+  status = {
+    "hp": hp_track,
+    "mp": mp_track,
+    "san": san_track,
+    "conditions": raw_status.get("conditions") if isinstance(raw_status.get("conditions"), list) else [],
+    "flags": raw_status.get("flags") if isinstance(raw_status.get("flags"), dict) else {},
+  }
+  return {
+    "id": raw_character.get("id"),
+    "rule_system": "coc",
+    "profile": normalized_profile,
+    "characteristics": characteristics,
+    "skills": raw_character.get("skills") if isinstance(raw_character.get("skills"), dict) else {},
+    "inventory": normalize_inventory_items(raw_character.get("inventory")),
+    "status": status,
+    "created_at": raw_character.get("created_at") or now_iso(),
+    "tags": raw_character.get("tags") if isinstance(raw_character.get("tags"), list) else [],
+    "extra": raw_character.get("extra") if isinstance(raw_character.get("extra"), dict) else {},
+  }
 
 
 def save_character_to_db(character_data: dict) -> None:
@@ -692,7 +275,7 @@ def save_character_to_db(character_data: dict) -> None:
       "on conflict(id) do update set name=excluded.name, data=excluded.data, created_at=excluded.created_at",
       (
         character_data["id"],
-        character_data["name"],
+        character_data["profile"]["name"],
         json.dumps(character_data, ensure_ascii=False),
         character_data["created_at"]
       )
@@ -706,12 +289,127 @@ def load_characters_from_db() -> None:
       rows = conn.execute("select id, data from characters").fetchall()
       for char_id, data in rows:
         try:
-          characters[char_id] = json.loads(data)
+          characters[char_id] = normalize_character_record(json.loads(data))
         except json.JSONDecodeError:
           continue
     except sqlite3.OperationalError:
       # Table might not exist yet
       pass
+
+
+def now_iso() -> str:
+  return datetime.utcnow().isoformat()
+
+
+def summarize_import_payload(payload: Any, limit: int = 320) -> str | None:
+  if payload is None:
+    return None
+  if isinstance(payload, str):
+    text = " ".join(payload.split())
+  else:
+    try:
+      text = json.dumps(payload, ensure_ascii=False, default=str)
+    except TypeError:
+      text = str(payload)
+  return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def unwrap_import_raw_output(raw_output: Any) -> tuple[dict[str, Any], Any]:
+  if isinstance(raw_output, dict) and set(raw_output.keys()).issubset({"meta", "payload"}):
+    meta = raw_output.get("meta") if isinstance(raw_output.get("meta"), dict) else {}
+    return meta, raw_output.get("payload")
+  return {}, raw_output
+
+
+def wrap_import_raw_output(payload: Any, meta: dict[str, Any]) -> dict[str, Any]:
+  return {
+    "meta": meta,
+    "payload": payload
+  }
+
+
+def update_import_task_runtime(
+  task: dict[str, Any],
+  *,
+  status: Any = UNSET,
+  stage: Any = UNSET,
+  raw_output: Any = UNSET,
+  normalized_output: Any = UNSET,
+  error_message: Any = UNSET,
+  error_type: Any = UNSET,
+  result_source: Any = UNSET,
+  output_summary: Any = UNSET,
+  next_action: Any = UNSET,
+  draft_version: Any = UNSET,
+  fallback_from: Any = UNSET
+) -> None:
+  meta, payload = unwrap_import_raw_output(task.get("raw_output"))
+  if raw_output is not UNSET:
+    payload = raw_output
+    meta["raw_output_summary"] = summarize_import_payload(raw_output)
+  elif payload is not None and "raw_output_summary" not in meta:
+    meta["raw_output_summary"] = summarize_import_payload(payload)
+  if status is not UNSET:
+    task["status"] = status
+  if normalized_output is not UNSET:
+    task["normalized_output"] = normalized_output
+  if error_message is not UNSET:
+    task["error_message"] = error_message
+  if stage is not UNSET:
+    meta["stage"] = stage
+  if error_type is not UNSET:
+    meta["error_type"] = error_type
+  if result_source is not UNSET:
+    meta["result_source"] = result_source
+  if output_summary is not UNSET:
+    meta["output_summary"] = output_summary
+  if next_action is not UNSET:
+    meta["next_action"] = next_action
+  if draft_version is not UNSET:
+    meta["draft_version"] = draft_version
+  if fallback_from is not UNSET:
+    meta["fallback_from"] = fallback_from
+  task["updated_at"] = now_iso()
+  meta["updated_at"] = task["updated_at"]
+  task["raw_output"] = wrap_import_raw_output(payload, meta)
+
+
+def serialize_import_task(task: dict[str, Any], include_payload: bool = True) -> dict[str, Any]:
+  meta, raw_payload = unwrap_import_raw_output(task.get("raw_output"))
+  status = task["status"]
+  stage = meta.get("stage") or status
+  error_type = meta.get("error_type")
+  result_source = meta.get("result_source")
+  data = {
+    "task_id": task["task_id"],
+    "module_id": task["module_id"],
+    "source_file_name": task["source_file_name"],
+    "source_file_type": task["source_file_type"],
+    "parser_type": task["parser_type"],
+    "parser_version": task["parser_version"],
+    "status": status,
+    "status_label": IMPORT_STATUS_LABELS.get(status, status),
+    "stage": stage,
+    "stage_label": IMPORT_STAGE_LABELS.get(stage, stage),
+    "result_source": result_source,
+    "result_source_label": IMPORT_RESULT_SOURCE_LABELS.get(result_source),
+    "error_type": error_type,
+    "error_label": IMPORT_ERROR_LABELS.get(error_type),
+    "error_message": task.get("error_message"),
+    "output_summary": meta.get("output_summary"),
+    "raw_output_summary": meta.get("raw_output_summary"),
+    "next_action": meta.get("next_action"),
+    "fallback_from": meta.get("fallback_from"),
+    "draft_version": meta.get("draft_version"),
+    "created_at": task["created_at"],
+    "updated_at": task["updated_at"],
+    "draft_ready": status == "completed" and task.get("normalized_output") is not None,
+    "can_open_editor": task.get("normalized_output") is not None
+  }
+  if include_payload:
+    data["raw_output"] = raw_payload
+    data["normalized_output"] = task.get("normalized_output")
+  return data
 
 
 def init_db() -> None:
@@ -720,91 +418,248 @@ def init_db() -> None:
       "create table if not exists structured_modules (module_id text primary key, data text not null, updated_at text not null)"
     )
     conn.execute(
+      "create table if not exists structured_module_drafts (module_id text primary key, data text not null, updated_at text not null)"
+    )
+    conn.execute(
+      "create table if not exists structured_module_versions (version_id text primary key, module_id text not null, status text not null, note text, data text not null, created_at text not null)"
+    )
+    conn.execute(
+      "create table if not exists module_import_tasks (task_id text primary key, module_id text not null, source_file_name text not null, source_file_type text not null, parser_type text not null, parser_version text not null, status text not null, raw_output text, normalized_output text, error_message text, created_at text not null, updated_at text not null)"
+    )
+    conn.execute(
       "create table if not exists characters (id text primary key, name text not null, data text not null, created_at text not null)"
     )
     conn.commit()
 
 
 def load_structured_modules() -> None:
+  structured_modules.clear()
+  draft_modules.clear()
   with sqlite3.connect(db_path()) as conn:
     rows = conn.execute("select module_id, data from structured_modules").fetchall()
     for module_id, data in rows:
       try:
         payload = json.loads(data)
-        structured = StructuredModule.model_validate(payload)
+        payload.setdefault("module_id", module_id)
+        payload.setdefault("status", "published")
+        structured = CocScenario.model_validate(payload)
         structured_modules[module_id] = structured
-        if module_id not in modules:
-          modules[module_id] = convert_structured_to_module(module_id, structured)
+      except json.JSONDecodeError:
+        continue
+    draft_rows = conn.execute("select module_id, data from structured_module_drafts").fetchall()
+    for module_id, data in draft_rows:
+      try:
+        payload = json.loads(data)
+        payload.setdefault("module_id", module_id)
+        payload.setdefault("status", "draft")
+        draft_modules[module_id] = CocScenario.model_validate(payload)
       except json.JSONDecodeError:
         continue
 
-
-def convert_structured_to_module(module_id: str, structured: StructuredModule) -> Module:
-  scene_items = [
-    Item(
-      id=item.id or f"scene_item_{i}",
-      name=item.name,
-      description=item.description
-    )
-    for i, item in enumerate(structured.scene_items)
-  ]
-  handout_items = [
-    Item(
-      id=handout.id or f"handout_{i}",
-      name=f"资料:{handout.title}",
-      description=handout.content
-    )
-    for i, handout in enumerate(structured.handouts)
-  ]
-  return Module(
-    id=module_id,
-    module_info=ModuleInfo(
-      name=structured.title,
-      description=structured.background,
-      tags=["Custom"]
-    ),
-    locations=[
-      Location(
-        id=f"loc_{i}",
-        name=loc.name,
-        description=loc.description,
-        connected_locations=loc.connections
-      ) for i, loc in enumerate(structured.locations)
-    ],
-    npcs=[
-      Npc(
-        id=f"npc_{i}",
-        name=npc.name,
-        location="unknown",
-        description=npc.description
-      ) for i, npc in enumerate(structured.npcs)
-    ],
-    quests=[
-      Quest(
-        id=f"quest_{i}",
-        title=quest.name,
-        description=quest.goal,
-        objective=quest.goal
-      ) for i, quest in enumerate(structured.quests)
-    ],
-    items=[*scene_items, *handout_items],
-    events=[
-      Event(
-        trigger=event.trigger,
-        result=event.result
-      ) for event in structured.events
-    ]
-  )
-
-
-def save_structured_module(module_id: str, module: StructuredModule) -> None:
-  payload = json.dumps(module.model_dump(), ensure_ascii=False)
+def save_structured_module(module_id: str, module: CocScenario) -> None:
+  normalized = module.model_copy(update={"module_id": module_id, "status": "published"})
+  payload = json.dumps(normalized.model_dump(), ensure_ascii=False)
   with sqlite3.connect(db_path()) as conn:
     conn.execute(
       "insert into structured_modules (module_id, data, updated_at) values (?, ?, ?) on conflict(module_id) do update set data=excluded.data, updated_at=excluded.updated_at",
-      (module_id, payload, datetime.utcnow().isoformat())
+      (module_id, payload, now_iso())
     )
     conn.commit()
+
+
+def save_module_draft(module_id: str, module: CocScenario) -> None:
+  normalized = module.model_copy(update={"module_id": module_id, "status": "draft"})
+  draft_modules[module_id] = normalized
+  payload = json.dumps(normalized.model_dump(), ensure_ascii=False)
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "insert into structured_module_drafts (module_id, data, updated_at) values (?, ?, ?) on conflict(module_id) do update set data=excluded.data, updated_at=excluded.updated_at",
+      (module_id, payload, now_iso())
+    )
+    conn.commit()
+
+
+def get_module_draft(module_id: str) -> CocScenario | None:
+  draft = draft_modules.get(module_id)
+  if draft:
+    return draft
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select data from structured_module_drafts where module_id = ?",
+      (module_id,)
+    ).fetchone()
+  if not row:
+    return None
+  payload = json.loads(row[0])
+  payload.setdefault("module_id", module_id)
+  payload.setdefault("status", "draft")
+  draft = CocScenario.model_validate(payload)
+  draft_modules[module_id] = draft
+  return draft
+
+
+def list_module_versions(module_id: str) -> list[dict[str, Any]]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select version_id, status, note, created_at, data from structured_module_versions where module_id = ? order by created_at desc",
+      (module_id,)
+    ).fetchall()
+  items = []
+  for version_id, status, note, created_at, data in rows:
+    parsed = json.loads(data)
+    items.append({
+      "version_id": version_id,
+      "status": status,
+      "note": note,
+      "created_at": created_at,
+      "title": parsed.get("title"),
+      "schema_version": parsed.get("schema_version"),
+      "rule_system": parsed.get("rule_system")
+    })
+  return items
+
+
+def create_module_version(module_id: str, module: CocScenario, status: str, note: str | None = None) -> dict[str, Any]:
+  version_id = f"ver_{uuid4().hex[:10]}"
+  created_at = now_iso()
+  snapshot = module.model_copy(update={"module_id": module_id, "status": status})
+  payload = json.dumps(snapshot.model_dump(), ensure_ascii=False)
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "insert into structured_module_versions (version_id, module_id, status, note, data, created_at) values (?, ?, ?, ?, ?, ?)",
+      (version_id, module_id, status, note, payload, created_at)
+    )
+    conn.commit()
+  return {
+    "version_id": version_id,
+    "status": status,
+    "note": note,
+    "created_at": created_at,
+    "title": snapshot.title,
+    "schema_version": snapshot.schema_version,
+    "rule_system": snapshot.rule_system
+  }
+
+
+def save_import_task(task: dict[str, Any]) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "insert into module_import_tasks (task_id, module_id, source_file_name, source_file_type, parser_type, parser_version, status, raw_output, normalized_output, error_message, created_at, updated_at) "
+      "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+      "on conflict(task_id) do update set module_id=excluded.module_id, source_file_name=excluded.source_file_name, source_file_type=excluded.source_file_type, parser_type=excluded.parser_type, parser_version=excluded.parser_version, status=excluded.status, raw_output=excluded.raw_output, normalized_output=excluded.normalized_output, error_message=excluded.error_message, updated_at=excluded.updated_at",
+      (
+        task["task_id"],
+        task["module_id"],
+        task["source_file_name"],
+        task["source_file_type"],
+        task["parser_type"],
+        task["parser_version"],
+        task["status"],
+        json.dumps(task.get("raw_output"), ensure_ascii=False) if task.get("raw_output") is not None else None,
+        json.dumps(task.get("normalized_output"), ensure_ascii=False) if task.get("normalized_output") is not None else None,
+        task.get("error_message"),
+        task["created_at"],
+        task["updated_at"]
+      )
+    )
+    conn.commit()
+
+
+def load_import_task_record(task_id: str) -> dict[str, Any] | None:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select task_id, module_id, source_file_name, source_file_type, parser_type, parser_version, status, raw_output, normalized_output, error_message, created_at, updated_at from module_import_tasks where task_id = ?",
+      (task_id,)
+    ).fetchone()
+  if not row:
+    return None
+  raw_output = json.loads(row[7]) if row[7] else None
+  normalized_output = json.loads(row[8]) if row[8] else None
+  return {
+    "task_id": row[0],
+    "module_id": row[1],
+    "source_file_name": row[2],
+    "source_file_type": row[3],
+    "parser_type": row[4],
+    "parser_version": row[5],
+    "status": row[6],
+    "raw_output": raw_output,
+    "normalized_output": normalized_output,
+    "error_message": row[9],
+    "created_at": row[10],
+    "updated_at": row[11]
+  }
+
+
+def get_import_task(task_id: str) -> dict[str, Any] | None:
+  task = load_import_task_record(task_id)
+  if not task:
+    return None
+  return serialize_import_task(task)
+
+
+def list_module_import_tasks(module_id: str, limit: int = 10) -> list[dict[str, Any]]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select task_id, module_id, source_file_name, source_file_type, parser_type, parser_version, status, raw_output, normalized_output, error_message, created_at, updated_at from module_import_tasks where module_id = ? order by created_at desc limit ?",
+      (module_id, limit)
+    ).fetchall()
+  items = []
+  for row in rows:
+    items.append(serialize_import_task({
+      "task_id": row[0],
+      "module_id": row[1],
+      "source_file_name": row[2],
+      "source_file_type": row[3],
+      "parser_type": row[4],
+      "parser_version": row[5],
+      "status": row[6],
+      "raw_output": json.loads(row[7]) if row[7] else None,
+      "normalized_output": json.loads(row[8]) if row[8] else None,
+      "error_message": row[9],
+      "created_at": row[10],
+      "updated_at": row[11]
+    }, include_payload=False))
+  return items
+
+
+def get_module_draft_updated_at_map() -> dict[str, str]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute("select module_id, updated_at from structured_module_drafts").fetchall()
+  return {module_id: updated_at for module_id, updated_at in rows}
+
+
+def get_module_version_count_map() -> dict[str, int]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute("select module_id, count(*) from structured_module_versions group by module_id").fetchall()
+  return {module_id: count for module_id, count in rows}
+
+
+def get_latest_import_summary_map() -> dict[str, dict[str, Any]]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select task_id, module_id, source_file_name, source_file_type, parser_type, parser_version, status, raw_output, normalized_output, error_message, created_at, updated_at from module_import_tasks order by created_at desc"
+    ).fetchall()
+  summary_map: dict[str, dict[str, Any]] = {}
+  for row in rows:
+    module_id = row[1]
+    if module_id in summary_map:
+      continue
+    summary_map[module_id] = serialize_import_task({
+      "task_id": row[0],
+      "module_id": row[1],
+      "source_file_name": row[2],
+      "source_file_type": row[3],
+      "parser_type": row[4],
+      "parser_version": row[5],
+      "status": row[6],
+      "raw_output": json.loads(row[7]) if row[7] else None,
+      "normalized_output": json.loads(row[8]) if row[8] else None,
+      "error_message": row[9],
+      "created_at": row[10],
+      "updated_at": row[11]
+    }, include_payload=False)
+  return summary_map
 
 
 def extract_pdf_text(path: str) -> str:
@@ -817,49 +672,516 @@ def extract_pdf_text(path: str) -> str:
   return " ".join(text.split())
 
 
-async def ai_structure_module(text: str) -> StructuredModule:
+def extract_docx_text(path: str) -> str:
+  try:
+    with zipfile.ZipFile(path) as archive:
+      data = archive.read("word/document.xml")
+  except (KeyError, zipfile.BadZipFile):
+    raise HTTPException(status_code=400, detail="DOCX解析失败")
+  ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+  root = ET.fromstring(data)
+  paragraphs: list[str] = []
+  for paragraph in root.findall(".//w:p", ns):
+    text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
+    if text:
+      paragraphs.append(text)
+  return "\n".join(paragraphs)
+
+
+def infer_source_type(filename: str) -> str:
+  suffix = os.path.splitext(filename)[1].lower()
+  return suffix.lstrip(".") or "unknown"
+
+
+def parse_embedded_json(value: Any, fallback: Any):
+  if isinstance(value, (dict, list)):
+    return value
+  if isinstance(value, str):
+    text = value.strip()
+    if not text:
+      return fallback
+    try:
+      return json.loads(text)
+    except json.JSONDecodeError:
+      return fallback
+  return fallback
+
+
+def coerce_workflow_structured_data(data: dict[str, Any]) -> dict[str, Any]:
+  data["extensions"] = parse_embedded_json(data.get("extensions"), {})
+  data["custom_types"] = parse_embedded_json(data.get("custom_types"), [])
+
+  for collection_name in ("locations", "npcs", "events", "quests", "sequence", "clues", "handouts", "scene_items", "assets", "triggers"):
+    items = data.get(collection_name)
+    if not isinstance(items, list):
+      continue
+    for item in items:
+      if not isinstance(item, dict):
+        continue
+      item["extra"] = parse_embedded_json(item.get("extra"), {})
+
+  for trigger in data.get("triggers", []) if isinstance(data.get("triggers"), list) else []:
+    if not isinstance(trigger, dict):
+      continue
+    conditions = trigger.get("conditions")
+    if isinstance(conditions, list):
+      for condition in conditions:
+        if isinstance(condition, dict):
+          condition["extra"] = parse_embedded_json(condition.get("extra"), {})
+    actions = trigger.get("actions")
+    if isinstance(actions, list):
+      for action in actions:
+        if isinstance(action, dict):
+          action["extra"] = parse_embedded_json(action.get("extra"), {})
+          action["payload"] = parse_embedded_json(action.get("payload"), {})
+  return data
+
+
+def normalize_location_ids(data: dict[str, Any]) -> None:
+  location_id_map: dict[str, str] = {}
+  for index, location in enumerate(data.get("locations", []) if isinstance(data.get("locations"), list) else []):
+    if not isinstance(location, dict):
+      continue
+    location_id = str(location.get("id") or location.get("name") or f"location_{index}")
+    location["id"] = location_id
+    location_id_map[str(location.get("name") or location_id)] = location_id
+    location_id_map[location_id] = location_id
+
+  for index, scene in enumerate(data.get("sequence", []) if isinstance(data.get("sequence"), list) else []):
+    if not isinstance(scene, dict):
+      continue
+    scene["id"] = str(scene.get("id") or f"scene_{index}")
+    scene_location_id = scene.get("location_id")
+    if scene_location_id is not None:
+      scene["location_id"] = location_id_map.get(str(scene_location_id), str(scene_location_id))
+    scene.setdefault("order", index)
+
+  for index, scene_item in enumerate(data.get("scene_items", []) if isinstance(data.get("scene_items"), list) else []):
+    if not isinstance(scene_item, dict):
+      continue
+    scene_item["id"] = str(scene_item.get("id") or f"item_{index}")
+    item_location_id = scene_item.get("location_id")
+    if item_location_id is not None:
+      scene_item["location_id"] = location_id_map.get(str(item_location_id), str(item_location_id))
+
+
+def ensure_scene_sequence(data: dict[str, Any]) -> None:
+  sequence = data.get("sequence")
+  if isinstance(sequence, list) and sequence:
+    return
+  generated_sequence = []
+  for index, location in enumerate(data.get("locations", []) if isinstance(data.get("locations"), list) else []):
+    if not isinstance(location, dict):
+      continue
+    location_id = str(location.get("id") or location.get("name") or f"location_{index}")
+    generated_sequence.append({
+      "id": f"scene_{location_id}",
+      "title": str(location.get("name") or f"场景{index + 1}"),
+      "location_id": location_id,
+      "order": index,
+      "description": str(location.get("description") or ""),
+      "prerequisites": [generated_sequence[-1]["id"]] if generated_sequence else [],
+      "tags": [],
+      "extra": {}
+    })
+  data["sequence"] = generated_sequence
+
+
+def normalize_structured_module(module_id: str, payload: dict[str, Any] | CocScenario, source_type: str, status: Literal["draft", "published"]) -> CocScenario:
+  if isinstance(payload, CocScenario):
+    data = payload.model_dump()
+  else:
+    data = dict(payload)
+  data = coerce_workflow_structured_data(data)
+  data.setdefault("title", module_id)
+  data.setdefault("background", "")
+  data.setdefault("locations", [])
+  data.setdefault("npcs", [])
+  data.setdefault("events", [])
+  data.setdefault("quests", [])
+  data.setdefault("sequence", [])
+  data.setdefault("triggers", [])
+  data.setdefault("clues", [])
+  data.setdefault("handouts", [])
+  data.setdefault("scene_items", [])
+  data.setdefault("assets", [])
+  data.setdefault("themes", [])
+  data.setdefault("extensions", {})
+  data.setdefault("custom_types", [])
+  data["module_id"] = module_id
+  data["source_type"] = source_type
+  data["status"] = status
+  data["rule_system"] = "coc"
+  data["schema_version"] = max(int(data.get("schema_version", 3) or 3), 3)
+  normalize_location_ids(data)
+  ensure_scene_sequence(data)
+  return CocScenario.model_validate(data)
+
+
+def resolve_structured_candidate(value: Any) -> dict[str, Any] | None:
+  if isinstance(value, CocScenario):
+    return value.model_dump()
+  if isinstance(value, dict):
+    if "title" in value and "background" in value:
+      return value
+    for preferred_key in ("structured_output", "structured", "module", "result", "json"):
+      if preferred_key in value:
+        resolved = resolve_structured_candidate(value[preferred_key])
+        if resolved:
+          return resolved
+    for nested in value.values():
+      resolved = resolve_structured_candidate(nested)
+      if resolved:
+        return resolved
+  if isinstance(value, str):
+    text = value.strip()
+    if not text:
+      return None
+    try:
+      parsed = parse_json_block(text)
+    except HTTPException:
+      return None
+    return resolve_structured_candidate(parsed)
+  return None
+
+
+def resolve_dify_structured_output(workflow_response: dict[str, Any]) -> dict[str, Any]:
+  data = workflow_response.get("data", workflow_response)
+  outputs = data.get("outputs", {}) if isinstance(data, dict) else {}
+  candidate = resolve_structured_candidate(outputs) or resolve_structured_candidate(data)
+  if not candidate:
+    raise HTTPException(status_code=502, detail="Dify未返回可识别的结构化结果")
+  return candidate
+
+
+async def run_dify_import(
+  module_id: str,
+  filename: str,
+  content: bytes,
+  content_type: str | None,
+  progress_callback: Callable[[str, str], Awaitable[None]] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+  api_key = os.getenv("DIFY_API_KEY") or os.getenv("DIFY_WORKFLOW_API_KEY")
+  if not api_key:
+    raise ImportPipelineError("dify_workflow_failed", "DIFY_API_KEY 未配置", "dify_running", "dify")
+  api_url = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1").rstrip("/")
+  async with httpx.AsyncClient(timeout=180) as client:
+    try:
+      upload_response = await client.post(
+        f"{api_url}/files/upload",
+        headers={"Authorization": f"Bearer {api_key}"},
+        data={"user": "admin"},
+        files={"file": (filename, content, content_type or "application/octet-stream")}
+      )
+    except httpx.TimeoutException as exc:
+      raise ImportPipelineError("dify_upload_failed", "Dify 文件上传超时", "dify_uploading", "dify", {"exception": str(exc)}) from exc
+    except httpx.HTTPError as exc:
+      raise ImportPipelineError("dify_upload_failed", "Dify 文件上传失败", "dify_uploading", "dify", {"exception": str(exc)}) from exc
+    if upload_response.status_code >= 400:
+      raise ImportPipelineError(
+        "dify_upload_failed",
+        "Dify 文件上传失败",
+        "dify_uploading",
+        "dify",
+        {"status_code": upload_response.status_code, "body": summarize_import_payload(upload_response.text)}
+      )
+    upload_payload = upload_response.json()
+    file_id = upload_payload.get("id")
+    if not file_id:
+      raise ImportPipelineError("dify_upload_failed", "Dify 未返回 file_id", "dify_uploading", "dify", upload_payload)
+    if progress_callback:
+      await progress_callback("dify_running", "文件已上传至 Dify，正在等待 Workflow 结构化结果")
+    try:
+      workflow_response = await client.post(
+        f"{api_url}/workflows/run",
+        headers={
+          "Authorization": f"Bearer {api_key}",
+          "Content-Type": "application/json"
+        },
+        json={
+          "inputs": {
+            "module_id": module_id,
+            "file": {
+              "type": "document",
+              "transfer_method": "local_file",
+              "upload_file_id": file_id
+            },
+            "sys.query": "解析文本为标准json结构"
+          },
+          "response_mode": "blocking",
+          "user": "admin"
+        }
+      )
+    except httpx.TimeoutException as exc:
+      raise ImportPipelineError(
+        "dify_workflow_failed",
+        "Dify Workflow 超时，准备切换 fallback",
+        "dify_running",
+        "dify",
+        {"exception": str(exc)},
+        fallback_allowed=True
+      ) from exc
+    except httpx.HTTPError as exc:
+      raise ImportPipelineError("dify_workflow_failed", "Dify Workflow 请求失败", "dify_running", "dify", {"exception": str(exc)}) from exc
+  if workflow_response.status_code >= 500:
+    raise ImportPipelineError(
+      "dify_workflow_failed",
+      "Dify Workflow 返回 5xx，准备切换 fallback",
+      "dify_running",
+      "dify",
+      {"status_code": workflow_response.status_code, "body": summarize_import_payload(workflow_response.text)},
+      fallback_allowed=True
+    )
+  if workflow_response.status_code >= 400:
+    raise ImportPipelineError(
+      "dify_workflow_failed",
+      "Dify Workflow 运行失败",
+      "dify_running",
+      "dify",
+      {"status_code": workflow_response.status_code, "body": summarize_import_payload(workflow_response.text)}
+    )
+  workflow_payload = workflow_response.json()
+  workflow_status = workflow_payload.get("data", {}).get("status")
+  if workflow_status not in (None, "succeeded"):
+    fallback_allowed = isinstance(workflow_status, str) and "timeout" in workflow_status.lower()
+    error_text = workflow_payload.get("data", {}).get("error") or workflow_status
+    raise ImportPipelineError(
+      "dify_workflow_failed",
+      f"Dify Workflow 执行失败: {error_text}",
+      "dify_running",
+      "dify",
+      workflow_payload,
+      fallback_allowed=fallback_allowed
+    )
+  try:
+    return workflow_payload, resolve_dify_structured_output(workflow_payload)
+  except HTTPException as exc:
+    raise ImportPipelineError(
+      "structured_result_unrecognized",
+      "Dify 返回成功，但结构化结果不可识别",
+      "dify_running",
+      "dify",
+      workflow_payload
+    ) from exc
+
+
+async def run_fallback_import(
+  filename: str,
+  content: bytes,
+  task_id: str,
+  dify_error: ImportPipelineError | None = None
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+  try:
+    text = await extract_text_for_import(filename, content, task_id)
+    ai_structured = await ai_structure_module(text)
+  except HTTPException as exc:
+    detail = exc.detail.get("message") if isinstance(exc.detail, dict) and "message" in exc.detail else str(exc.detail)
+    raise ImportPipelineError(
+      "fallback_processing_failed",
+      f"Fallback 处理失败: {detail}",
+      "fallback_running",
+      "openrouter_fallback",
+      {"detail": detail}
+    ) from exc
+  raw_output = ai_structured.model_dump()
+  if dify_error:
+    raw_output = {
+      "fallback_from": dify_error.error_type,
+      "dify_error": dify_error.message,
+      "openrouter_output": raw_output
+    }
+  return raw_output, ai_structured.model_dump(), "openrouter_fallback" if dify_error else "openrouter"
+
+
+async def process_admin_import_task(
+  task: dict[str, Any],
+  file_path: str,
+  content_type: str | None
+) -> None:
+  with open(file_path, "rb") as source:
+    content = source.read()
+
+  async def persist_stage(stage: str, summary: str, *, result_source: str | None = None):
+    update_import_task_runtime(
+      task,
+      status="processing",
+      stage=stage,
+      result_source=result_source if result_source is not None else UNSET,
+      error_type=None,
+      error_message=None,
+      output_summary=summary
+    )
+    save_import_task(task)
+
+  try:
+    source_type = task["parser_type"]
+    raw_output: Any = None
+    parsed_output: dict[str, Any] | None = None
+    if task["parser_type"] == "dify":
+      await persist_stage("dify_uploading", "上传成功，正在将文件提交给 Dify", result_source="dify")
+      try:
+        raw_output, parsed_output = await run_dify_import(
+          task["module_id"],
+          task["source_file_name"],
+          content,
+          content_type,
+          progress_callback=lambda stage, summary: persist_stage(stage, summary, result_source="dify")
+        )
+        source_type = "dify"
+      except ImportPipelineError as dify_error:
+        update_import_task_runtime(
+          task,
+          status="processing",
+          stage=dify_error.stage,
+          result_source="dify",
+          error_type=dify_error.error_type,
+          error_message=dify_error.message,
+          output_summary=dify_error.message,
+          raw_output=dify_error.raw_payload
+        )
+        save_import_task(task)
+        if not dify_error.fallback_allowed:
+          raise
+        await persist_stage("fallback_extracting", "Dify 超时或返回 5xx，正在切换 fallback 解析", result_source="openrouter_fallback")
+        raw_output, parsed_output, source_type = await run_fallback_import(
+          task["source_file_name"],
+          content,
+          task["task_id"],
+          dify_error
+        )
+    else:
+      await persist_stage("fallback_extracting", "上传成功，正在提取文档文本并准备后备解析", result_source="openrouter")
+      raw_output, parsed_output, source_type = await run_fallback_import(
+        task["source_file_name"],
+        content,
+        task["task_id"]
+      )
+    await persist_stage("normalizing", "结构化候选结果已返回，正在执行后端标准化", result_source=source_type)
+    update_import_task_runtime(task, raw_output=raw_output, result_source=source_type)
+    save_import_task(task)
+    normalized = normalize_structured_module(task["module_id"], parsed_output or {}, source_type, "draft")
+    await persist_stage("draft_saving", "标准化完成，正在写入 draft 与版本快照", result_source=source_type)
+    save_module_draft(task["module_id"], normalized)
+    version = create_module_version(task["module_id"], normalized, "draft", f"{task['parser_type']} import draft")
+    update_import_task_runtime(
+      task,
+      status="completed",
+      stage="completed",
+      result_source=source_type,
+      raw_output=raw_output,
+      normalized_output=normalized.model_dump(),
+      error_type=None,
+      error_message=None,
+      output_summary="结构化候选结果已自动写入 draft，管理员现在可以继续编辑并在校验后发布",
+      next_action="打开编辑器继续补充字段、修订扩展信息并执行发布校验",
+      draft_version=version,
+      fallback_from="dify_workflow_failed" if source_type == "openrouter_fallback" else None
+    )
+    save_import_task(task)
+  except ImportPipelineError as exc:
+    update_import_task_runtime(
+      task,
+      status="failed",
+      stage="failed",
+      result_source=exc.source,
+      raw_output=exc.raw_payload if exc.raw_payload is not None else UNSET,
+      normalized_output=None,
+      error_type=exc.error_type,
+      error_message=exc.message,
+      output_summary=exc.message,
+      next_action="查看失败来源后可重新上传，或改用 OpenRouter/Fallback 再次生成 draft"
+    )
+    save_import_task(task)
+  except Exception as exc:
+    update_import_task_runtime(
+      task,
+      status="failed",
+      stage="failed",
+      normalized_output=None,
+      error_type="backend_normalization_failed",
+      error_message=f"后端标准化失败: {exc}",
+      output_summary="结构化结果已返回，但后端在标准化、校验或落库时失败",
+      next_action="检查任务摘要与原始响应后重试，必要时在编辑器中手动补全"
+    )
+    save_import_task(task)
+
+
+async def extract_text_for_import(filename: str, content: bytes, task_id: str) -> str:
+  source_file_type = infer_source_type(filename)
+  if source_file_type == "pdf":
+    temp_path = os.path.join(storage_dir, f"{task_id}.pdf")
+    with open(temp_path, "wb") as target:
+      target.write(content)
+    return extract_pdf_text(temp_path)
+  if source_file_type == "docx":
+    temp_path = os.path.join(storage_dir, f"{task_id}.docx")
+    with open(temp_path, "wb") as target:
+      target.write(content)
+    return extract_docx_text(temp_path)
+  raise HTTPException(status_code=400, detail="仅支持 PDF/DOCX")
+
+
+async def ai_structure_module(text: str) -> CocScenario:
   api_key = os.getenv("OPENROUTER_API_KEY")
   if not api_key:
     raise HTTPException(status_code=500, detail="OPENROUTER未配置")
   prompt = (
-    "你是TRPG模组解析器。把输入的PDF文本转成结构化JSON。"
+    "你是TRPG模组解析器。把输入的模组文本转成结构化JSON。"
     "只输出JSON，不要包含任何解释或多余文本。"
-    "JSON必须包含字段: title, background, locations, npcs, events, quests, sequence, triggers, clues, handouts, scene_items, assets。"
+    "JSON必须包含字段: title, background, locations, npcs, events, quests, sequence, triggers, clues, handouts, scene_items, assets, themes, extensions, custom_types。"
     "locations字段包含: name, description, connections, npcs。"
     "npcs字段包含: name, description, secrets。"
     "events字段包含: trigger, result。"
     "quests字段包含: name, goal。"
-    "sequence字段包含: id, title, location, order, description, prerequisites。"
+    "sequence字段包含: id, title, location_id, order, description, prerequisites。"
     "triggers字段包含: id, name, once, conditions, actions。"
     "triggers.conditions字段包含: type, key, operator, value。"
     "triggers.actions字段包含: type, target_id, payload。"
-    "clues字段包含: id, title, content, source, discovery_conditions。"
+    "clues字段包含: id, title, content, source, discovery_conditions, visibility, trigger_ref, discovery_method, gm_notes。"
     "handouts字段包含: id, title, content, type, asset_ids, grant_conditions, add_to_inventory。"
-    "scene_items字段包含: id, name, location, description, interactions, linked_clue_ids。"
+    "scene_items字段包含: id, name, location_id, description, interactions, linked_clue_ids。"
     "assets字段包含: id, name, type, url, description。"
+    "如果遇到无法稳定归类的新信息，请放入合适对象的extra字段或顶层extensions字段，不要丢弃。"
   )
   async with httpx.AsyncClient(timeout=60) as client:
     response = await client.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "http://localhost:3000"),
-        "X-Title": "DiceTales"
-      },
+      f"{(os.getenv('OPENROUTER_API_URL', 'https://openrouter.ai/api/v1')).rstrip('/')}/chat/completions",
+      headers=build_openrouter_headers(api_key),
       json={
         "model": os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
         "messages": [
           {"role": "system", "content": prompt},
-          {"role": "user", "content": text[:12000]}
+          {"role": "user", "content": text[:8000]}
         ]
       }
     )
   if response.status_code >= 400:
-    raise HTTPException(status_code=502, detail="AI解析失败")
-  content = response.json().get("choices", [{}])[0].get("message", {}).get("content") or ""
+    raise HTTPException(status_code=502, detail=f"AI解析失败: {response.text}")
+  content = extract_openrouter_message_content(response.json())
   payload = parse_json_block(content)
-  return StructuredModule.model_validate(payload)
+  return normalize_structured_module("draft", payload, "openrouter", "draft")
+
+
+def build_openrouter_headers(api_key: str) -> dict[str, str]:
+  return {
+    "Authorization": f"Bearer {api_key}",
+    "Content-Type": "application/json",
+    "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "http://localhost:3000"),
+    "X-Title": "DiceTales"
+  }
+
+
+def extract_openrouter_message_content(payload: dict[str, Any]) -> str:
+  content = payload.get("choices", [{}])[0].get("message", {}).get("content") or ""
+  if isinstance(content, str):
+    return content
+  if isinstance(content, list):
+    return "".join(
+      item.get("text", "")
+      for item in content
+      if isinstance(item, dict) and isinstance(item.get("text"), str)
+    )
+  return str(content)
 
 
 def parse_json_block(content: str) -> dict:
@@ -877,141 +1199,539 @@ def parse_json_block(content: str) -> dict:
       raise HTTPException(status_code=502, detail="AI返回非JSON")
 
 
-def ensure_default_structured(module_id: str) -> StructuredModule:
-  if module_id in structured_modules:
-    return structured_modules[module_id]
-  base = modules.get(module_id)
-  if not base:
-    raise HTTPException(status_code=404, detail="Module not found")
-  fallback = StructuredModule(
-    title=base.module_info.name,
-    background=base.module_info.description,
-    locations=[
-      StructuredLocation(
-        name=location.name,
-        description=location.description,
-        connections=location.connected_locations,
-        npcs=[npc.name for npc in base.npcs if npc.location == location.id]
-      )
-      for location in base.locations
-    ],
-    npcs=[
-      StructuredNpc(name=npc.name, description=npc.description, secrets=None)
-      for npc in base.npcs
-    ],
-    events=[StructuredEvent(trigger=event.trigger, result=event.result) for event in base.events],
-    quests=[StructuredQuest(name=quest.title, goal=quest.objective) for quest in base.quests],
-    sequence=[],
-    triggers=[],
-    clues=[],
-    handouts=[],
-    scene_items=[],
-    assets=[]
-  )
-  structured_modules[module_id] = fallback
-  save_structured_module(module_id, fallback)
-  return fallback
+def ensure_default_structured(module_id: str) -> CocScenario:
+  scenario = get_published_scenario(module_id)
+  if scenario:
+    return scenario
+  raise HTTPException(status_code=404, detail="Scenario not found")
 
 
-def get_recent_messages(session_id: str) -> list[ChatMessage]:
-  logs = game_logs.get(session_id, [])
+def get_recent_messages(session_id: str) -> list[CocChatMessage]:
+  logs = session_logs.get(session_id, [])
   return logs[-10:]
 
 
-def append_message(session_id: str, role: Role, content: str) -> list[ChatMessage]:
-  logs = game_logs.setdefault(session_id, [])
-  logs.append(ChatMessage(role=role, content=content))
+def append_message(session_id: str, role: Role, content: str) -> list[CocChatMessage]:
+  logs = session_logs.setdefault(session_id, [])
+  logs.append(CocChatMessage(role=role, content=content))
   if len(logs) > 10:
-    game_logs[session_id] = logs[-10:]
-  return game_logs[session_id]
+    session_logs[session_id] = logs[-10:]
+  return session_logs[session_id]
 
 
-def build_context_payload(
-  module: StructuredModule,
-  location_name: str,
-  quests: list[str],
-  player_character: dict,
-  game_state: dict,
-  recent_dialogue: list[ChatMessage],
+def get_session_state_record(session_id: str) -> dict[str, Any]:
+  session = sessions.get(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+  state = session.get("state")
+  if not isinstance(state, dict):
+    state = {
+      "current_scene_id": None,
+      "current_location_id": None,
+      "discovered_clue_ids": [],
+      "granted_handout_ids": [],
+      "triggered_rule_ids": [],
+      "flags": {},
+      "time_progress": None,
+    }
+    session["state"] = state
+  return state
+
+
+def get_sorted_scenes(module: CocScenario) -> list[CocScene]:
+  return sorted(module.sequence, key=lambda item: (item.order, item.title))
+
+
+def get_location_by_id(module: CocScenario, location_id: str | None) -> CocLocation | None:
+  if not location_id:
+    return module.locations[0] if module.locations else None
+  return next((item for item in module.locations if location_ref(item) == location_id), None)
+
+
+def get_scene_by_id(module: CocScenario, scene_id: str | None) -> CocScene | None:
+  if not scene_id:
+    return None
+  return next((item for item in module.sequence if item.id == scene_id), None)
+
+
+def get_current_scene(module: CocScenario, state: dict[str, Any]) -> CocScene | None:
+  current_scene = get_scene_by_id(module, state.get("current_scene_id"))
+  if current_scene:
+    return current_scene
+  current_location_id = state.get("current_location_id")
+  if current_location_id:
+    matched = next((item for item in get_sorted_scenes(module) if scene_location_ref(item) == current_location_id), None)
+    if matched:
+      return matched
+  scenes = get_sorted_scenes(module)
+  return scenes[0] if scenes else None
+
+
+def sync_state_with_scene(module: CocScenario, state: dict[str, Any]) -> None:
+  current_scene = get_current_scene(module, state)
+  if current_scene:
+    state["current_scene_id"] = current_scene.id
+    if current_scene.location_id:
+      state["current_location_id"] = current_scene.location_id
+  elif not state.get("current_location_id") and module.locations:
+    state["current_location_id"] = location_ref(module.locations[0])
+  flags = state.setdefault("flags", {})
+  visible_location_ids = [
+    item for item in flags.get("visible_location_ids", [])
+    if isinstance(item, str) and item
+  ] if isinstance(flags.get("visible_location_ids"), list) else []
+  visited_scene_ids = [
+    item for item in flags.get("visited_scene_ids", [])
+    if isinstance(item, str) and item
+  ] if isinstance(flags.get("visited_scene_ids"), list) else []
+  current_location_id = state.get("current_location_id")
+  if isinstance(current_location_id, str) and current_location_id and current_location_id not in visible_location_ids:
+    visible_location_ids.append(current_location_id)
+  if current_scene and current_scene.location_id and current_scene.location_id not in visible_location_ids:
+    visible_location_ids.append(current_scene.location_id)
+  if current_scene and current_scene.id not in visited_scene_ids:
+    visited_scene_ids.append(current_scene.id)
+  flags["visible_location_ids"] = visible_location_ids
+  flags["visited_scene_ids"] = visited_scene_ids
+
+
+def get_scene_items_for_location(module: CocScenario, location_id: str | None) -> list[CocSceneItem]:
+  if not location_id:
+    return []
+  return [item for item in module.scene_items if item.location_id == location_id]
+
+
+def get_discovered_clues(module: CocScenario, state: dict[str, Any]) -> list[CocClue]:
+  discovered_ids = set(state.get("discovered_clue_ids", []))
+  return [item for item in module.clues if item.id in discovered_ids]
+
+
+def get_granted_handouts(module: CocScenario, state: dict[str, Any]) -> list[CocHandout]:
+  granted_ids = set(state.get("granted_handout_ids", []))
+  return [item for item in module.handouts if item.id in granted_ids]
+
+
+def get_keeper_background(module: CocScenario) -> str:
+  extensions = module.extensions if isinstance(module.extensions, dict) else {}
+  raw_sections = extensions.get("raw_sections")
+  if isinstance(raw_sections, dict):
+    keeper_background = raw_sections.get("keeper_background")
+    if isinstance(keeper_background, str) and keeper_background.strip():
+      return keeper_background.strip()
+  keeper_background = extensions.get("keeper_background")
+  if isinstance(keeper_background, str):
+    return keeper_background.strip()
+  return ""
+
+
+def get_player_opening_statement(module: CocScenario) -> str:
+  extensions = module.extensions if isinstance(module.extensions, dict) else {}
+  opening_statement = extensions.get("player_opening_statement")
+  if isinstance(opening_statement, str) and opening_statement.strip():
+    return opening_statement.strip()
+  opening_context = extensions.get("player_opening_context")
+  if isinstance(opening_context, str) and opening_context.strip():
+    return opening_context.strip()
+  return ""
+
+
+def get_player_opening_options(module: CocScenario) -> list[str]:
+  extensions = module.extensions if isinstance(module.extensions, dict) else {}
+  options = extensions.get("player_opening_options")
+  if not isinstance(options, list):
+    return []
+  return [item.strip() for item in options if isinstance(item, str) and item.strip()]
+
+
+def build_session_intro_message(module: CocScenario, state: dict[str, Any]) -> str:
+  current_scene = get_current_scene(module, state)
+  current_location = get_location_by_id(module, state.get("current_location_id"))
+  location_name = current_location.name if current_location else "案发现场"
+  active_quest = next((item.goal for item in module.quests if isinstance(item.goal, str) and item.goal.strip()), "查明这起事件背后的真相。")
+  scene_title = current_scene.title if current_scene and current_scene.title else "调查的起点"
+  opening_statement = get_player_opening_statement(module)
+  opening_options = get_player_opening_options(module)
+  options_text = ""
+  if opening_options:
+    options_text = "\n\n你可以先这样展开调查：\n" + "\n".join(
+      f"{index}. {item}" for index, item in enumerate(opening_options, start=1)
+    )
+  if opening_statement:
+    return (
+      f"{opening_statement}\n\n"
+      f"现在，你已经来到{location_name}。调查从“{scene_title}”开始。你准备先做什么？"
+      f"{options_text}"
+    )
+  if module.module_id == BASELINE_MODULE_ID:
+    return (
+      f"你应托来到{location_name}，接手托马斯·金博尔提出的委托。"
+      "有人夜里潜入屋内，却没有卷走值钱财物，只拿走了他失踪叔叔道格拉斯最珍视的旧书。"
+      f"眼下，你需要做的是：{active_quest}\n\n"
+      f"现在，调查从“{scene_title}”开始。托马斯正在等你开口。你准备先做什么？"
+      f"{options_text}"
+    )
+  return (
+    f"你已经来到{location_name}，正式卷入《{module.title}》的调查。"
+    f"此刻最紧迫的问题是：{active_quest}\n\n"
+    f"现在，调查从“{scene_title}”开始。你准备先做什么？"
+    f"{options_text}"
+  )
+
+
+def serialize_player_scenario(module: CocScenario) -> dict[str, Any]:
+  return {
+    "module_id": module.module_id,
+    "rule_system": module.rule_system,
+    "title": module.title,
+    "background": module.background,
+    "themes": module.themes,
+    "opening_options": get_player_opening_options(module),
+  }
+
+
+def serialize_player_location(location: CocLocation) -> dict[str, Any]:
+  return {
+    "id": location_ref(location),
+    "name": location.name,
+  }
+
+
+def serialize_player_scene(scene: CocScene, status: str) -> dict[str, Any]:
+  return {
+    "id": scene.id,
+    "title": scene.title,
+    "status": status,
+  }
+
+
+def serialize_player_state(state: dict[str, Any]) -> dict[str, Any]:
+  flags = state.get("flags", {})
+  safe_flags = {}
+  if isinstance(flags, dict):
+    pending_check = flags.get("pending_check")
+    if pending_check is not None:
+      safe_flags["pending_check"] = pending_check
+    active_quest = flags.get("active_quest")
+    if isinstance(active_quest, str) and active_quest:
+      safe_flags["active_quest"] = active_quest
+    visible_location_ids = flags.get("visible_location_ids")
+    if isinstance(visible_location_ids, list):
+      safe_flags["visible_location_ids"] = [
+        item for item in visible_location_ids if isinstance(item, str) and item
+      ]
+  return {
+    "current_scene_id": state.get("current_scene_id"),
+    "current_location_id": state.get("current_location_id"),
+    "discovered_clue_ids": [
+      item for item in state.get("discovered_clue_ids", [])
+      if isinstance(item, str) and item
+    ],
+    "granted_handout_ids": [
+      item for item in state.get("granted_handout_ids", [])
+      if isinstance(item, str) and item
+    ],
+    "triggered_rule_ids": [
+      item for item in state.get("triggered_rule_ids", [])
+      if isinstance(item, str) and item
+    ],
+    "flags": safe_flags,
+    "time_progress": state.get("time_progress"),
+  }
+
+
+def normalize_required_check(raw_check: Any) -> dict[str, Any] | None:
+  if not isinstance(raw_check, dict):
+    return None
+  kind = raw_check.get("kind")
+  key = raw_check.get("key")
+  name = raw_check.get("name")
+  if kind not in ("skill", "characteristic"):
+    return None
+  if not isinstance(key, str) or not key:
+    return None
+  if not isinstance(name, str) or not name:
+    name = key
+  difficulty = raw_check.get("difficulty")
+  if difficulty not in ("regular", "hard", "extreme"):
+    difficulty = "regular"
+  request = CocCheckRequest(
+    check_id=str(raw_check.get("check_id") or f"check_{uuid4().hex[:8]}"),
+    action=str(raw_check.get("action") or name),
+    kind=kind,
+    key=key,
+    name=name,
+    difficulty=difficulty,
+    target_override=raw_check.get("target_override") if isinstance(raw_check.get("target_override"), int) else None,
+    reason=raw_check.get("reason") if isinstance(raw_check.get("reason"), str) else None,
+  )
+  return request.model_dump()
+
+
+def normalize_check_result(raw_result: Any) -> dict[str, Any] | None:
+  if not isinstance(raw_result, dict):
+    return None
+  try:
+    return CocCheckResult(**raw_result).model_dump()
+  except Exception:
+    return None
+
+
+def resolve_check_target(investigator: dict[str, Any], check: CocCheckRequest) -> int:
+  if check.target_override is not None:
+    return max(1, min(99, check.target_override))
+  if check.kind == "characteristic":
+    characteristic_value = investigator.get("characteristics", {}).get(check.key)
+    if isinstance(characteristic_value, int):
+      return max(1, min(99, characteristic_value))
+  skill_value = investigator.get("skills", {}).get(check.key)
+  if isinstance(skill_value, int):
+    return max(1, min(99, skill_value))
+  return 50
+
+
+def resolve_required_threshold(target: int, difficulty: str) -> int:
+  if difficulty == "extreme":
+    return max(1, target // 5)
+  if difficulty == "hard":
+    return max(1, target // 2)
+  return target
+
+
+def evaluate_coc_check(investigator: dict[str, Any], check: CocCheckRequest, roll_value: int | None = None) -> CocCheckResult:
+  rolled_value = roll_value if isinstance(roll_value, int) and 1 <= roll_value <= 100 else random.randint(1, 100)
+  target = resolve_check_target(investigator, check)
+  required_threshold = resolve_required_threshold(target, check.difficulty)
+  if rolled_value == 1:
+    level = "critical"
+  elif rolled_value == 100 or (rolled_value >= 96 and target < 50):
+    level = "fumble"
+  elif rolled_value <= max(1, target // 5):
+    level = "extreme"
+  elif rolled_value <= max(1, target // 2):
+    level = "hard"
+  elif rolled_value <= target:
+    level = "regular"
+  else:
+    level = "failure"
+  passed_levels = {
+    "regular": {"regular", "hard", "extreme", "critical"},
+    "hard": {"hard", "extreme", "critical"},
+    "extreme": {"extreme", "critical"},
+  }[check.difficulty]
+  return CocCheckResult(
+    check_id=check.check_id,
+    action=check.action,
+    kind=check.kind,
+    key=check.key,
+    name=check.name,
+    target=target,
+    required_threshold=required_threshold,
+    difficulty=check.difficulty,
+    passed=level in passed_levels,
+    level=level,
+    roll={"expression": "1d100", "value": rolled_value, "details": [rolled_value]},
+  )
+
+
+def apply_state_patch(state: dict[str, Any], patch_payload: dict[str, Any] | None) -> None:
+  if not isinstance(patch_payload, dict):
+    return
+  if isinstance(patch_payload.get("current_scene_id"), str):
+    state["current_scene_id"] = patch_payload["current_scene_id"]
+  if isinstance(patch_payload.get("current_location_id"), str):
+    state["current_location_id"] = patch_payload["current_location_id"]
+  discovered = state.setdefault("discovered_clue_ids", [])
+  granted = state.setdefault("granted_handout_ids", [])
+  triggered = state.setdefault("triggered_rule_ids", [])
+  flags = state.setdefault("flags", {})
+  for clue_id in patch_payload.get("add_discovered_clue_ids", []):
+    if isinstance(clue_id, str) and clue_id not in discovered:
+      discovered.append(clue_id)
+  for handout_id in patch_payload.get("add_granted_handout_ids", []):
+    if isinstance(handout_id, str) and handout_id not in granted:
+      granted.append(handout_id)
+  for rule_id in patch_payload.get("add_triggered_rule_ids", []):
+    if isinstance(rule_id, str) and rule_id not in triggered:
+      triggered.append(rule_id)
+  merge_flags = patch_payload.get("merge_flags")
+  if isinstance(merge_flags, dict):
+    flags.update(merge_flags)
+  time_progress_delta = patch_payload.get("time_progress_delta")
+  if isinstance(time_progress_delta, int):
+    current_time = state.get("time_progress")
+    state["time_progress"] = (current_time if isinstance(current_time, int) else 0) + time_progress_delta
+
+
+def build_ai_context_payload(
+  session: dict[str, Any],
+  module: CocScenario,
+  investigator: dict[str, Any],
+  state: dict[str, Any],
+  recent_dialogue: list[CocChatMessage],
   player_action: str,
-  triggered_events: list[StructuredEvent]
-) -> dict:
-  location = next((item for item in module.locations if item.name == location_name), None)
-  resolved_location = location or module.locations[0]
-  npc_names = resolved_location.npcs
-  npc_details = [npc for npc in module.npcs if npc.name in npc_names]
-  
-  # Extract inventory for AI context
-  inventory = player_character.get("inventory", [])
-  equipped_items = [item for item in inventory if item.get("is_equipped")]
-  
-  context_payload = {
-    "module_meta": {
-      "title": module.title,
+  check_result: dict[str, Any] | None = None
+) -> dict[str, Any]:
+  sync_state_with_scene(module, state)
+  current_scene = get_current_scene(module, state)
+  current_location = get_location_by_id(module, state.get("current_location_id"))
+  current_location_id = current_location.id if current_location else None
+  npc_names = current_location.npcs if current_location else []
+  npc_details = [npc.model_dump() for npc in module.npcs if npc.name in npc_names]
+  session_payload = {
+    "id": session["id"],
+    "rule_system": session.get("rule_system", "coc"),
+    "scenario_id": session["scenario_id"],
+    "investigator_id": session["investigator_id"],
+    "started_at": session["started_at"],
+    "updated_at": session["updated_at"],
+    "state": state,
+  }
+  return {
+    "scenario": {
+      "module_id": module.module_id,
       "rule_system": module.rule_system,
+      "title": module.title,
       "tone": module.tone,
       "core_conflict": module.core_conflict,
-      "background": module.background
+      "background": module.background,
+      "keeper_background": get_keeper_background(module),
+      "themes": module.themes,
     },
-    "location": {
-      "name": resolved_location.name,
-      "description": resolved_location.description,
-      "connections": resolved_location.connections,
-      "sensory_details": resolved_location.sensory_details.model_dump() if resolved_location.sensory_details else None,
-      "tactical_elements": resolved_location.tactical_elements,
-      "hidden_treasures": resolved_location.hidden_treasures,
-      "atmosphere": resolved_location.atmosphere,
-      "hidden_clues": resolved_location.hidden_clues
+    "investigator": investigator,
+    "session": session_payload,
+    "runtime": {
+      "current_scene": current_scene.model_dump() if current_scene else None,
+      "current_location": current_location.model_dump() if current_location else None,
+      "scene_items": [item.model_dump() for item in get_scene_items_for_location(module, current_location_id)],
+      "npcs_here": npc_names,
+      "npc_details": npc_details,
+      "discovered_clues": [clue.model_dump() for clue in get_discovered_clues(module, state)],
+      "granted_handouts": [handout.model_dump() for handout in get_granted_handouts(module, state)],
+      "available_scenes": [scene.model_dump() for scene in get_sorted_scenes(module)],
+      "pending_check": state.get("flags", {}).get("pending_check"),
+      "last_check_result": check_result or state.get("flags", {}).get("last_check_result"),
     },
-    "npcs_here": npc_names,
-    "npc_details": [npc.model_dump() for npc in npc_details],
-    "quests": quests,
-    "player_character": {
-      "name": player_character.get("name"),
-      "stats": player_character.get("stats"),
-      "skills": player_character.get("skills"),
-      "hp": player_character.get("hp"),
-      "equipped_items": equipped_items,
-      "inventory": inventory
-    },
-    "game_state": game_state,
     "recent_dialogue": [item.model_dump() for item in recent_dialogue],
     "player_action": player_action,
-    "triggered_events": [event.model_dump() for event in triggered_events]
   }
-  
-  # Filter out None values to keep context clean
-  if context_payload["location"]:
-      context_payload["location"] = {k: v for k, v in context_payload["location"].items() if v is not None}
-      
-  return context_payload
 
 
-def build_prompt(payload: dict) -> str:
-  rules = (
-    "规则："
-    "1 优先使用模组中的事件和剧情。"
-    "2 不要创造新的主要剧情。"
-    "3 可以创造细节描述。"
-    "4 如果玩家行为脱离模组，创造合理的过渡剧情。"
-    "5 绝对不能改变模组核心结局。"
-    "6 输出必须为JSON。"
-    "7 不允许修改模组核心设定或新增主线任务。"
+def build_check_outcome_guidance(check_result: dict[str, Any] | None) -> str:
+  if not isinstance(check_result, dict):
+    return ""
+  passed = check_result.get("passed")
+  if passed is None:
+    return ""
+  name = str(check_result.get("name") or check_result.get("key") or "本次检定").strip()
+  level = str(check_result.get("level") or "").strip()
+  key = str(check_result.get("key") or "").strip().lower()
+  social_keys = {"appearance", "charm", "fast_talk", "persuade", "intimidate", "credit_rating"}
+  if passed is False:
+    guidance = [
+      "[检定裁定硬规则]",
+      f"本轮检定【{name}】结果为失败（{level or 'failure'}）。",
+      "你必须把这次行动裁定为失败、受阻、只获得无关紧要信息，或付出明显代价；绝不能把失败叙述成成功。",
+      "失败后禁止直接描述玩家成功说服、成功取信、成功获得关键线索、成功潜入或成功达成目标。",
+    ]
+    if key in social_keys or name in {"外貌", "魅惑", "话术", "说服", "恐吓", "信用评级"}:
+      guidance.append("这是社交类检定失败：NPC 通常不会配合，可能敷衍、拒绝、警惕、回避，甚至直接不理会玩家；不要在失败时直接吐露关键情报。")
+    return "\n".join(guidance)
+  return (
+    "[检定裁定提示]\n"
+    f"本轮检定【{name}】结果为成功（{level or 'regular'}）。"
+    "请按成功等级给出相称收益，但不要超出当前场景已允许的信息边界。"
   )
-  format_hint = (
-    "输出JSON格式："
-    "{"
-    '"narration":"",'
-    '"choices":[],'
-    '"state_update":{},'
-    '"location_change":null,'
-    '"quest_update":null'
-    "}"
-  )
-  return f"{rules}\n{format_hint}\n输入：{json.dumps(payload, ensure_ascii=False)}"
 
 
-def normalize_ai_reply(module: StructuredModule, reply: dict) -> dict:
+def is_social_check_result(check_result: dict[str, Any] | None) -> bool:
+  if not isinstance(check_result, dict):
+    return False
+  key = str(check_result.get("key") or "").strip().lower()
+  name = str(check_result.get("name") or "").strip()
+  social_keys = {"app", "appearance", "charm", "fast_talk", "persuade", "intimidate", "credit_rating", "credit"}
+  social_names = {"外貌", "魅惑", "魅力", "话术", "说服", "恐吓", "信用评级"}
+  return key in social_keys or name in social_names
+
+
+def failed_check_reply_conflicts(reply: dict[str, Any], check_result: dict[str, Any] | None) -> bool:
+  if not isinstance(check_result, dict) or check_result.get("passed") is not False:
+    return False
+  narration = str(reply.get("narration") or "").strip()
+  if not narration:
+    return False
+  failure_markers = [
+    "失败",
+    "受阻",
+    "没能",
+    "未能",
+    "没有",
+    "拒绝",
+    "敷衍",
+    "警惕",
+    "沉默",
+    "回避",
+    "离开",
+    "不理会",
+    "没空",
+    "无功而返",
+  ]
+  generic_success_markers = [
+    "你成功",
+    "成功地",
+    "顺利地",
+    "获得了关键线索",
+    "找到关键线索",
+    "直接达成了目标",
+    "达成了目标",
+    "取信了",
+  ]
+  social_success_markers = [
+    "愿意停下和你交谈",
+    "愿意和你交谈",
+    "很乐意",
+    "打开话匣子",
+    "告诉你",
+    "向你透露",
+    "说起",
+    "配合你",
+    "被你说服",
+    "答应了你的请求",
+    "承认曾经见过",
+  ]
+  success_markers = [*generic_success_markers]
+  if is_social_check_result(check_result):
+    success_markers.extend(social_success_markers)
+  has_failure_marker = any(marker in narration for marker in failure_markers)
+  has_success_marker = any(marker in narration for marker in success_markers)
+  return has_success_marker and not has_failure_marker
+
+
+def build_failed_check_fallback_narration(check_result: dict[str, Any] | None) -> str:
+  if not isinstance(check_result, dict):
+    return "这次尝试没有达成预期目标，关键进展暂时受阻。"
+  name = str(check_result.get("name") or check_result.get("key") or "本次行动").strip()
+  if is_social_check_result(check_result):
+    return f"你的【{name}】检定失败了。对方没有被你打动，只是敷衍、回避或直接结束了交流；你没有获得关键情报。"
+  return f"你的【{name}】检定失败了。这次尝试没有达成预期目标，只得到一些无关紧要的反馈，关键进展暂时受阻。"
+
+
+def enforce_check_result_consistency(reply: dict[str, Any], check_result: dict[str, Any] | None) -> dict[str, Any]:
+  if not failed_check_reply_conflicts(reply, check_result):
+    return reply
+  return {
+    **reply,
+    "narration": build_failed_check_fallback_narration(check_result),
+    "state_update": {},
+    "scene_change": None,
+    "location_change": None,
+    "quest_update": None,
+    "required_check": None,
+    "check_result": None,
+    "inventory_update": None,
+  }
+
+
+def normalize_ai_reply(module: CocScenario, reply: dict) -> dict:
   narration = reply.get("narration")
   narration_text = narration if isinstance(narration, str) and narration else "风声掠过，未闻回应。"
   choices = reply.get("choices")
@@ -1022,9 +1742,14 @@ def normalize_ai_reply(module: StructuredModule, reply: dict) -> dict:
   state_update = reply.get("state_update")
   if not isinstance(state_update, dict):
     state_update = {}
+  scene_change = reply.get("scene_change")
+  if not isinstance(scene_change, str) or not any(
+    item.id == scene_change or item.title == scene_change for item in module.sequence
+  ):
+    scene_change = None
   location_change = reply.get("location_change")
   if not isinstance(location_change, str) or not any(
-    item.name == location_change for item in module.locations
+    location_ref(item) == location_change or item.name == location_change for item in module.locations
   ):
     location_change = None
   quest_update = reply.get("quest_update")
@@ -1033,175 +1758,243 @@ def normalize_ai_reply(module: StructuredModule, reply: dict) -> dict:
   ):
     quest_update = None
   
-  required_check = reply.get("required_check")
+  required_check = normalize_required_check(reply.get("required_check"))
+  check_result = normalize_check_result(reply.get("check_result"))
   inventory_update = reply.get("inventory_update")
 
   return {
     "narration": narration_text,
     "choices": normalized_choices,
     "state_update": state_update,
+    "scene_change": scene_change,
     "location_change": location_change,
     "quest_update": quest_update,
     "required_check": required_check,
+    "check_result": check_result,
     "inventory_update": inventory_update
   }
 
 
-async def generate_ai_reply(session_id: str, message: str) -> dict:
+def apply_inventory_update(investigator: dict[str, Any], inventory_update: Any) -> None:
+  if not isinstance(inventory_update, dict):
+    return
+  inventory = investigator.get("inventory", [])
+  if "add" in inventory_update and isinstance(inventory_update["add"], list):
+    for item in inventory_update["add"]:
+      if not isinstance(item, dict):
+        continue
+      existing_item = next((candidate for candidate in inventory if candidate["name"] == item.get("name") and candidate.get("category") == item.get("category")), None)
+      if existing_item:
+        existing_item["quantity"] = existing_item.get("quantity", 1) + item.get("quantity", 1)
+      else:
+        inventory.append({
+          "id": f"item_{uuid4().hex[:8]}",
+          "name": item.get("name", "神秘物品"),
+          "category": item.get("category", "tool"),
+          "origin": "module",
+          "is_equipped": False,
+          "quantity": item.get("quantity", 1),
+          "description": item.get("description", ""),
+          "stats": item.get("stats", {})
+        })
+  if "remove" in inventory_update and isinstance(inventory_update["remove"], list):
+    for item in inventory_update["remove"]:
+      if not isinstance(item, dict):
+        continue
+      for index, existing in enumerate(inventory):
+        if existing["name"] != item.get("name"):
+          continue
+        remove_quantity = item.get("quantity", 1)
+        if existing.get("quantity", 1) > remove_quantity:
+          existing["quantity"] -= remove_quantity
+        else:
+          inventory.pop(index)
+        break
+  investigator["inventory"] = inventory
+  save_character_to_db(investigator)
+
+
+def apply_reply_to_session(
+  session_id: str,
+  module: CocScenario,
+  player_message: str,
+  reply: dict,
+  check_result: dict[str, Any] | None = None
+) -> dict[str, Any]:
+  session = sessions[session_id]
+  state = get_session_state_record(session_id)
+  flags = state.setdefault("flags", {})
+  investigator_id = session.get("investigator_id")
+
+  scene_change = reply.get("scene_change")
+  location_change = reply.get("location_change")
+  quest_update = reply.get("quest_update")
+  state_update = reply.get("state_update") if isinstance(reply.get("state_update"), dict) else {}
+  resolved_check_result = check_result or reply.get("check_result")
+
+  if resolved_check_result:
+    flags["last_check_result"] = resolved_check_result
+    flags.pop("pending_check", None)
+    state_patch = resolved_check_result.get("state_patch")
+    if isinstance(state_patch, dict):
+      apply_state_patch(state, state_patch)
+  if reply.get("required_check"):
+    flags["pending_check"] = reply["required_check"]
+
+  if scene_change:
+    state["current_scene_id"] = scene_change
+  if location_change:
+    state["current_location_id"] = location_change
+  if quest_update:
+    flags["active_quest"] = quest_update
+  if state_update:
+    flags.update(state_update)
+
+  sync_state_with_scene(module, state)
+  trigger_reply = {**reply}
+  if resolved_check_result:
+    trigger_reply["check_result"] = resolved_check_result
+  trigger_outcome = apply_structured_triggers(session_id, module, player_message, trigger_reply)
+  auto_clues = auto_reveal_clues(module, state, player_message)
+  auto_handouts = auto_grant_handouts(module, state, player_message, investigator_id)
+
+  revealed_clues = trigger_outcome["revealed_clues"]
+  for clue in auto_clues:
+    if clue["id"] not in {item["id"] for item in revealed_clues}:
+      revealed_clues.append(clue)
+
+  granted_handouts = trigger_outcome["granted_handouts"]
+  for handout in auto_handouts:
+    if handout["id"] not in {item["id"] for item in granted_handouts}:
+      granted_handouts.append(handout)
+
+  sync_state_with_scene(module, state)
+  session["updated_at"] = now_iso()
+  return {
+    "revealed_clues": revealed_clues,
+    "granted_handouts": granted_handouts,
+  }
+
+
+async def generate_ai_reply(session_id: str, message: str, check_result: dict[str, Any] | None = None) -> dict:
   session = sessions.get(session_id)
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
-  module = ensure_default_structured(session["module_id"])
-  
-  # Append player message
-  append_message(session_id, "player", message)
+  module = ensure_default_structured(session["scenario_id"])
+  investigator = characters.get(session["investigator_id"])
+  if not investigator:
+    raise HTTPException(status_code=404, detail="Investigator not found")
+  state = get_session_state_record(session_id)
 
-  # Dify API Configuration
-  dify_api_key = os.getenv("DIFY_API_KEY", "")
-  dify_api_url = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1")
-  
-  if not dify_api_key:
-      return {
-          "narration": "DM的灵魂尚未被唤醒 (后端缺少 DIFY_API_KEY 配置，请在 .env.local 中添加)。",
-          "choices": [],
-          "state_update": {},
-          "location_change": None,
-          "quest_update": None
-      }
-  
-  # Call Dify Chatflow
+  append_message(session_id, "player", message)
+  recent_dialogue = get_recent_messages(session_id)
+  context_payload = build_ai_context_payload(
+    session,
+    module,
+    investigator,
+    state,
+    recent_dialogue,
+    message,
+    check_result,
+  )
+
+  openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+  openrouter_api_url = (os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1")).rstrip("/")
+  openrouter_model = (
+    os.getenv("OPENROUTER_KP_MODEL")
+    or os.getenv("OPENROUTER_MODEL")
+    or "openai/gpt-4o-mini"
+  )
+
+  if not openrouter_api_key:
+    return {
+      "narration": "DM的灵魂尚未被唤醒 (后端缺少 OPENROUTER_API_KEY 配置，请在 .env.local 中添加)。",
+      "choices": [],
+      "state_update": {},
+      "scene_change": None,
+      "location_change": None,
+      "quest_update": None
+    }
+
   async with httpx.AsyncClient(timeout=60) as client:
     try:
-      # Inject combat and skill check rules into the context or query
+      check_outcome_guidance = build_check_outcome_guidance(check_result)
       system_instructions = """
 [重要规则]
-1. 战斗与动作：玩家可以通过快捷按钮发送（如"我发动攻击！"）或自然语言描述（如"我跳上吊灯砸地精"）。
-2. 动作判定：如果你判断玩家的行动是复杂的战术动作，请在你的回复中明确指出这消耗了他们的【动作】或【附赠动作】。
-3. 属性检定：当玩家尝试有失败风险的行动时（如攀爬、欺骗、攻击），你必须要求玩家进行对应的【属性检定】（如：请进行一次力量检定）。
-4. 格式要求：你的回复必须依然保持 JSON 格式，且情节描述放在 "narration" 字段中。
-5. 技能检定交互：如果你要求玩家进行检定（如隐匿、察觉、力量等），请在 JSON 中增加 "required_check" 字段，指明检定类型。例如：{"required_check": {"type": "skill", "name": "隐匿", "attr": "dexterity"}} 或 {"type": "save", "name": "敏捷豁免", "attr": "dexterity"}。
-6. 物品管理：如果你判断玩家获得了新物品（如搜刮尸体、NPC赠送），或者消耗了物品（如喝掉药水），请在 JSON 中增加 "inventory_update" 字段。
-   - 添加物品格式：{"inventory_update": {"add": [{"name": "地精短刀", "category": "weapon", "quantity": 1, "description": "粗糙的武器", "stats": {"damage": "1d4"}}]}}
-   - 消耗物品格式：{"inventory_update": {"remove": [{"name": "金币", "quantity": 5}]}}
+1. 当前是 COC 调查场景，请以守秘人/KP 视角回应。
+2. 遇到有失败风险的行动时，使用 "required_check" 输出统一检定对象：{"check_id":"","action":"","kind":"skill|characteristic","key":"","name":"","difficulty":"regular|hard|extreme","reason":""}。
+3. 场景推进优先使用 scene_change、location_change 与 state_update，不要输出额外格式。
+4. 如果玩家获得或消耗物品，使用 "inventory_update" 描述增减。
+5. 如果输入里已经包含 check_result，请直接基于该结构裁定后果，不要再次要求重复检定。
+6. 输出必须是 JSON，对话与叙事内容写入 "narration"。
+7. 检定失败时，绝不能把失败叙述成成功；社交检定失败时，NPC 可以敷衍、警惕、拒绝、沉默或直接不理会玩家。
+8. 检定成功时，也只能给出与成功等级相称的信息，不能越过当前场景边界直接泄露真相。
 """
-      augmented_query = f"{system_instructions}\n玩家行动：{message}"
+      augmented_query = (
+        f"{system_instructions}\n"
+        f"{check_outcome_guidance}\n"
+        f"[会话上下文]\n{json.dumps(context_payload, ensure_ascii=False)}\n"
+        f"[玩家行动]\n{message}"
+      )
 
       response = await client.post(
-        f"{dify_api_url}/chat-messages",
-        headers={
-          "Authorization": f"Bearer {dify_api_key}",
-          "Content-Type": "application/json"
-        },
+        f"{openrouter_api_url}/chat/completions",
+        headers=build_openrouter_headers(openrouter_api_key),
         json={
-          "inputs": {
-            "session_id": session_id  # Pass session_id to Dify
-          },
-          "query": augmented_query,
-          "response_mode": "blocking",
-          "conversation_id": "", # Stateless for now, handled by backend logic
-          "user": session.get("user_id", "default_user")
+          "model": openrouter_model,
+          "temperature": 0.3,
+          "messages": [
+            {"role": "system", "content": system_instructions},
+            {"role": "user", "content": augmented_query}
+          ]
         }
       )
     except httpx.RequestError as e:
-      print(f"Dify Request Error: {e}")
+      print(f"OpenRouter Request Error: {e}")
       return {
-        "narration": f"DM似乎在翻阅规则书... (网络连接错误: {e})",
+        "narration": f"DM似乎在翻阅规则书... (OpenRouter 网络连接错误: {e})",
         "choices": [],
         "state_update": {},
+        "scene_change": None,
         "location_change": None,
         "quest_update": None
       }
   
   if response.status_code != 200:
-    print(f"Dify Error: {response.status_code} - {response.text}")
+    print(f"OpenRouter Error: {response.status_code} - {response.text}")
     error_msg = response.text
     try:
-        error_json = response.json()
-        error_msg = error_json.get("message", error_msg)
+      error_json = response.json().get("error", {})
+      error_msg = error_json.get("message", error_msg)
     except:
-        pass
-    
-    # Fallback if Dify fails
+      pass
+    if response.status_code == 401 or "User not found" in error_msg:
+      error_msg = "当前 OPENROUTER_API_KEY 无效、已失效，或对应账户不可用。"
+    elif response.status_code == 402:
+      error_msg = "OpenRouter 账户余额不足，无法继续调用模型。"
+    elif response.status_code == 429:
+      error_msg = "OpenRouter 调用频率或额度受限，请稍后重试。"
+
     return {
-      "narration": f"DM似乎在翻阅规则书... (Dify连接失败: {response.status_code} - {error_msg})",
+      "narration": f"DM似乎在翻阅规则书... (OpenRouter 连接失败: {response.status_code} - {error_msg})",
       "choices": [],
       "state_update": {},
+      "scene_change": None,
       "location_change": None,
       "quest_update": None
     }
     
-  dify_data = response.json()
-  answer = dify_data.get("answer", "")
-  
-  # Parse Dify response (expecting JSON string in 'answer')
+  answer = extract_openrouter_message_content(response.json())
   try:
-    result_data = json.loads(answer)
-  except json.JSONDecodeError:
-    # If not JSON, treat as raw text narration
+    result_data = parse_json_block(answer)
+  except HTTPException:
     result_data = {"narration": answer}
 
   reply = normalize_ai_reply(module, result_data)
+  reply = enforce_check_result_consistency(reply, check_result)
   append_message(session_id, "ai", reply["narration"])
-  
-  # Handle Inventory Update
-  if reply.get("inventory_update"):
-      char_id = session.get("character_id")
-      if char_id and char_id in characters:
-          char = characters[char_id]
-          inv_update = reply["inventory_update"]
-          inventory = char.get("inventory", [])
-          
-          # Add items
-          if "add" in inv_update and isinstance(inv_update["add"], list):
-              for item in inv_update["add"]:
-                  # Check if item already exists (stackable like arrows/gold)
-                  existing_item = next((i for i in inventory if i["name"] == item.get("name") and i.get("category") == "consumable"), None)
-                  if existing_item:
-                      existing_item["quantity"] = existing_item.get("quantity", 1) + item.get("quantity", 1)
-                  else:
-                      new_item = {
-                          "id": f"item_{uuid4().hex[:8]}",
-                          "name": item.get("name", "神秘物品"),
-                          "category": item.get("category", "tool"),
-                          "origin": "module",
-                          "is_equipped": False,
-                          "quantity": item.get("quantity", 1),
-                          "description": item.get("description", ""),
-                          "stats": item.get("stats", {})
-                      }
-                      inventory.append(new_item)
-          
-          # Remove items
-          if "remove" in inv_update and isinstance(inv_update["remove"], list):
-              for item in inv_update["remove"]:
-                  for i, existing in enumerate(inventory):
-                      if existing["name"] == item.get("name"):
-                          remove_qty = item.get("quantity", 1)
-                          if existing.get("quantity", 1) > remove_qty:
-                              existing["quantity"] -= remove_qty
-                          else:
-                              inventory.pop(i)
-                          break
-          
-          char["inventory"] = inventory
-          save_character_to_db(char)
-  
-  # Update State
-  location_change = reply["location_change"]
-  quest_update = reply["quest_update"]
-  state_update = reply["state_update"]
-  next_state = session_states.setdefault(session_id, {})
-  
-  if location_change:
-    next_state["location"] = location_change
-  if quest_update:
-    next_state["quest"] = quest_update
-  if state_update:
-    merged = next_state.get("game_state", {})
-    if isinstance(merged, dict):
-      merged.update(state_update)
-      next_state["game_state"] = merged
-  trigger_outcome = apply_structured_triggers(session_id, module, message, reply)
+  apply_inventory_update(investigator, reply.get("inventory_update"))
+  trigger_outcome = apply_reply_to_session(session_id, module, message, reply, check_result)
   if trigger_outcome["revealed_clues"]:
     reply["revealed_clues"] = trigger_outcome["revealed_clues"]
   if trigger_outcome["granted_handouts"]:
@@ -1224,17 +2017,63 @@ def admin_response(data: Any, meta: dict | None = None):
   return {"data": data, "meta": meta or {}, "error": None}
 
 
+def validate_module_for_publish(module: CocScenario) -> list[str]:
+  errors: list[str] = []
+  if not module.title.strip():
+    errors.append("标题不能为空")
+  if not module.background.strip():
+    errors.append("背景不能为空")
+  location_ids = {location_ref(location) for location in module.locations}
+  scene_ids = {scene.id for scene in module.sequence}
+  clue_ids = {clue.id for clue in module.clues}
+  handout_ids = {handout.id for handout in module.handouts}
+  asset_ids = {asset.id for asset in module.assets}
+  trigger_ids = {rule.id for rule in module.triggers}
+  for step in module.sequence:
+    if step.location_id and step.location_id not in location_ids:
+      errors.append(f"场景 {step.id} 引用了不存在的地点 {step.location_id}")
+    missing_prerequisites = [scene_id for scene_id in step.prerequisites if scene_id not in scene_ids]
+    if missing_prerequisites:
+      errors.append(f"场景 {step.id} 引用了不存在的前置场景 {', '.join(missing_prerequisites)}")
+  for item in module.scene_items:
+    if item.location_id not in location_ids:
+      errors.append(f"场景物件 {item.id} 引用了不存在的地点 {item.location_id}")
+    missing_clues = [clue_id for clue_id in item.linked_clue_ids if clue_id not in clue_ids]
+    if missing_clues:
+      errors.append(f"场景物件 {item.id} 引用了不存在的线索 {', '.join(missing_clues)}")
+  for handout in module.handouts:
+    missing_assets = [asset_id for asset_id in handout.asset_ids if asset_id not in asset_ids]
+    if missing_assets:
+      errors.append(f"资料 {handout.id} 引用了不存在的资源 {', '.join(missing_assets)}")
+  for clue in module.clues:
+    if clue.trigger_ref and clue.trigger_ref not in trigger_ids:
+      errors.append(f"线索 {clue.id} 引用了不存在的触发器 {clue.trigger_ref}")
+  for rule in module.triggers:
+    for action in rule.actions:
+      if action.type == "reveal_clue" and action.target_id and action.target_id not in clue_ids:
+        errors.append(f"触发器 {rule.id} 引用了不存在的线索 {action.target_id}")
+      if action.type == "grant_handout" and action.target_id and action.target_id not in handout_ids:
+        errors.append(f"触发器 {rule.id} 引用了不存在的资料 {action.target_id}")
+      if action.type == "branch_scene" and action.target_id and action.target_id not in scene_ids:
+        errors.append(f"触发器 {rule.id} 引用了不存在的场景 {action.target_id}")
+      if action.type == "move_location" and action.target_id and action.target_id not in location_ids:
+        errors.append(f"触发器 {rule.id} 引用了不存在的地点 {action.target_id}")
+  return errors
+
+
 @app.get("/modules")
 async def list_modules():
-  return {"modules": [module.model_dump() for module in modules.values()]}
+  return {"modules": [build_module_summary(module) for module in list_visible_published_scenarios()]}
 
 
 @app.get("/modules/{module_id}")
 async def get_module(module_id: str):
-  module = modules.get(module_id)
+  if module_id != BASELINE_MODULE_ID:
+    raise HTTPException(status_code=404, detail="Scenario not found")
+  module = get_published_scenario(module_id)
   if not module:
-    raise HTTPException(status_code=404, detail="Module not found")
-  return {"module": module.model_dump()}
+    raise HTTPException(status_code=404, detail="Scenario not found")
+  return {"module": build_module_summary(module)}
 
 
 @app.post("/modules/{module_id}/pdf")
@@ -1249,10 +2088,10 @@ async def upload_module_pdf(module_id: str, file: UploadFile = File(...)):
   text = extract_pdf_text(dest)
   if not text:
     raise HTTPException(status_code=400, detail="PDF解析失败")
-  structured = await ai_structure_module(text)
+  structured = normalize_structured_module(module_id, await ai_structure_module(text), "pdf", "published")
   structured_modules[module_id] = structured
   save_structured_module(module_id, structured)
-  modules[module_id] = convert_structured_to_module(module_id, structured)
+  create_module_version(module_id, structured, "published", "legacy pdf import")
   return {"module_id": module_id, "path": dest, "structured": structured.model_dump()}
 
 
@@ -1266,32 +2105,37 @@ async def get_module_pdf(module_id: str):
 
 @app.get("/modules/{module_id}/structured")
 async def get_structured_module(module_id: str):
+  if module_id != BASELINE_MODULE_ID:
+    raise HTTPException(status_code=404, detail="Scenario not found")
   module = ensure_default_structured(module_id)
-  return {"module": module.model_dump()}
+  return {"module": serialize_player_scenario(module)}
 
 
 @app.post("/modules/{module_id}/structured")
-async def save_structured_module_api(module_id: str, payload: StructuredModule):
-  structured_modules[module_id] = payload
-  save_structured_module(module_id, payload)
-  modules[module_id] = convert_structured_to_module(module_id, payload)
+async def save_structured_module_api(module_id: str, payload: CocScenario):
+  normalized = normalize_structured_module(module_id, payload, payload.source_type or "api", "published")
+  structured_modules[module_id] = normalized
+  save_structured_module(module_id, normalized)
+  create_module_version(module_id, normalized, "published", "public structured update")
   return {"module_id": module_id, "status": "stored"}
 
 
 @app.get("/admin/stats")
 async def admin_stats(x_admin_token: str | None = Header(default=None)):
   require_admin_token(x_admin_token)
+  visible_sessions = list_visible_sessions()
   recent_session = None
-  if sessions:
+  if visible_sessions:
     recent_session = max(
-      sessions.values(),
-      key=lambda item: item.get("created_at", "")
-    ).get("created_at")
+      visible_sessions,
+      key=lambda item: item.get("created_at") or item.get("started_at", "")
+    )
+    recent_session = recent_session.get("created_at") or recent_session.get("started_at")
   return admin_response({
-    "module_count": len(modules),
-    "structured_module_count": len(structured_modules),
+    "module_count": len(list_visible_published_scenarios()),
+    "structured_module_count": len(list_visible_published_scenarios()),
     "character_count": len(characters),
-    "session_count": len(sessions),
+    "session_count": len(visible_sessions),
     "recent_session_at": recent_session
   })
 
@@ -1300,25 +2144,25 @@ async def admin_stats(x_admin_token: str | None = Header(default=None)):
 async def admin_users(x_admin_token: str | None = Header(default=None)):
   require_admin_token(x_admin_token)
   aggregate: dict[str, dict] = {}
-  for session in sessions.values():
+  for session in list_visible_sessions():
     user_id = session.get("user_id") or "anonymous"
     data = aggregate.setdefault(user_id, {
       "user_id": user_id,
       "session_count": 0,
-      "character_ids": set(),
+      "investigator_ids": set(),
       "last_active_at": ""
     })
     data["session_count"] += 1
-    char_id = session.get("character_id")
-    if char_id:
-      data["character_ids"].add(char_id)
-    created_at = session.get("created_at", "")
-    if created_at > data["last_active_at"]:
-      data["last_active_at"] = created_at
+    investigator_id = session.get("investigator_id")
+    if investigator_id:
+      data["investigator_ids"].add(investigator_id)
+    updated_at = session.get("updated_at", "")
+    if updated_at > data["last_active_at"]:
+      data["last_active_at"] = updated_at
   users = [{
     "user_id": item["user_id"],
     "session_count": item["session_count"],
-    "character_count": len(item["character_ids"]),
+    "character_count": len(item["investigator_ids"]),
     "last_active_at": item["last_active_at"]
   } for item in aggregate.values()]
   users.sort(key=lambda item: item["last_active_at"], reverse=True)
@@ -1334,7 +2178,7 @@ async def admin_sessions(
   x_admin_token: str | None = Header(default=None)
 ):
   require_admin_token(x_admin_token)
-  items = list(sessions.values())
+  items = [serialize_admin_session(item) for item in list_visible_sessions()]
   if user_id:
     items = [item for item in items if (item.get("user_id") or "anonymous") == user_id]
   if module_id:
@@ -1353,22 +2197,26 @@ async def admin_modules(
   x_admin_token: str | None = Header(default=None)
 ):
   require_admin_token(x_admin_token)
-  module_ids = set(modules.keys()) | set(structured_modules.keys())
+  draft_updated_at_map = get_module_draft_updated_at_map()
+  version_count_map = get_module_version_count_map()
+  latest_import_summary_map = get_latest_import_summary_map()
   rows = []
-  for module_id in module_ids:
-    module = modules.get(module_id)
-    structured = structured_modules.get(module_id)
-    name = module.module_info.name if module else (structured.title if structured else module_id)
-    description = module.module_info.description if module else (structured.background if structured else "")
-    has_structured = module_id in structured_modules
-    row = {
-      "id": module_id,
-      "name": name,
-      "description": description,
-      "has_structured": has_structured,
-      "schema_version": structured.schema_version if structured else None
-    }
-    rows.append(row)
+  structured = get_published_scenario(BASELINE_MODULE_ID)
+  draft = draft_modules.get(BASELINE_MODULE_ID)
+  reference = draft or structured
+  if reference:
+    rows.append({
+      "id": BASELINE_MODULE_ID,
+      "name": reference.title,
+      "description": reference.background,
+      "has_structured": structured is not None,
+      "has_draft": BASELINE_MODULE_ID in draft_modules,
+      "schema_version": (draft.schema_version if draft else (structured.schema_version if structured else None)),
+      "status": (draft.status if draft else (structured.status if structured else "draft")),
+      "draft_updated_at": draft_updated_at_map.get(BASELINE_MODULE_ID),
+      "version_count": version_count_map.get(BASELINE_MODULE_ID, 0),
+      "latest_import": latest_import_summary_map.get(BASELINE_MODULE_ID)
+    })
   if q:
     q_lower = q.lower()
     rows = [row for row in rows if q_lower in row["id"].lower() or q_lower in row["name"].lower()]
@@ -1377,33 +2225,132 @@ async def admin_modules(
   return admin_response(paged, {"total": len(rows), "offset": offset, "limit": limit})
 
 
+@app.post("/admin/modules/import")
+async def admin_import_module(
+  background_tasks: BackgroundTasks,
+  module_id: str = Form(...),
+  parser_type: str = Form("dify"),
+  file: UploadFile = File(...),
+  x_admin_token: str | None = Header(default=None)
+):
+  require_admin_token(x_admin_token)
+  content = await file.read()
+  if not content:
+    raise HTTPException(status_code=400, detail="Empty file")
+  source_file_type = infer_source_type(file.filename or "")
+  task = {
+    "task_id": f"import_{uuid4().hex[:10]}",
+    "module_id": module_id,
+    "source_file_name": file.filename or f"{module_id}.{source_file_type}",
+    "source_file_type": source_file_type,
+    "parser_type": parser_type,
+    "parser_version": "v1",
+    "status": "uploaded",
+    "raw_output": None,
+    "normalized_output": None,
+    "error_message": None,
+    "created_at": now_iso(),
+    "updated_at": now_iso()
+  }
+  update_import_task_runtime(
+    task,
+    status="uploaded",
+    stage="upload_received",
+    output_summary="文件上传成功，任务已创建，后台将继续完成结构化与 draft 落库",
+    next_action="可留在当前页面轮询任务状态，完成后直接进入编辑器继续修订"
+  )
+  save_import_task(task)
+  stored_file_path = os.path.join(storage_dir, f"{task['task_id']}.{source_file_type}")
+  with open(stored_file_path, "wb") as target:
+    target.write(content)
+  background_tasks.add_task(process_admin_import_task, task, stored_file_path, file.content_type)
+  return JSONResponse(
+    content=admin_response({"task": serialize_import_task(task, include_payload=False)}),
+    status_code=202
+  )
+
+
+@app.get("/admin/modules/import-tasks/{task_id}")
+async def admin_import_task_detail(task_id: str, x_admin_token: str | None = Header(default=None)):
+  require_admin_token(x_admin_token)
+  task = get_import_task(task_id)
+  if not task:
+    raise HTTPException(status_code=404, detail="Import task not found")
+  return admin_response(task)
+
+
 @app.get("/admin/modules/{module_id}")
 async def admin_module_detail(module_id: str, x_admin_token: str | None = Header(default=None)):
   require_admin_token(x_admin_token)
-  structured = ensure_default_structured(module_id)
-  module = modules.get(module_id)
+  draft = get_module_draft(module_id)
+  structured = get_published_scenario(module_id)
+  if not structured and not draft:
+    raise HTTPException(status_code=404, detail="Scenario not found")
+  reference = draft or structured
   return admin_response({
     "module_id": module_id,
-    "module_info": module.module_info.model_dump() if module else {
-      "name": structured.title,
-      "description": structured.background,
-      "tags": ["Custom"]
+    "module_info": {
+      "name": reference.title,
+      "description": reference.background,
+      "tags": reference.themes or ["COC"]
     },
-    "structured": structured.model_dump()
+    "structured": structured.model_dump() if structured else None,
+    "draft": draft.model_dump() if draft else None,
+    "versions": list_module_versions(module_id),
+    "import_tasks": list_module_import_tasks(module_id)
   })
 
 
 @app.put("/admin/modules/{module_id}/structured")
 async def admin_update_module_structured(
   module_id: str,
-  payload: StructuredModule,
+  payload: CocScenario,
   x_admin_token: str | None = Header(default=None)
 ):
   require_admin_token(x_admin_token)
-  structured_modules[module_id] = payload
-  save_structured_module(module_id, payload)
-  modules[module_id] = convert_structured_to_module(module_id, payload)
-  return admin_response({"module_id": module_id, "status": "updated"})
+  normalized = normalize_structured_module(module_id, payload, payload.source_type or "admin", "draft")
+  save_module_draft(module_id, normalized)
+  version = create_module_version(module_id, normalized, "draft", "manual draft save")
+  return admin_response({"module_id": module_id, "status": "draft_saved", "draft": normalized.model_dump(), "version": version})
+
+
+@app.post("/admin/modules/{module_id}/publish")
+async def admin_publish_module(
+  module_id: str,
+  payload: ModulePublishRequest,
+  x_admin_token: str | None = Header(default=None)
+):
+  require_admin_token(x_admin_token)
+  draft = get_module_draft(module_id)
+  if not draft:
+    raise HTTPException(status_code=404, detail="Draft not found")
+  errors = validate_module_for_publish(draft)
+  if errors:
+    raise HTTPException(status_code=422, detail={"message": "发布校验失败", "errors": errors})
+  published = normalize_structured_module(module_id, draft, draft.source_type or "admin", "published")
+  structured_modules[module_id] = published
+  save_structured_module(module_id, published)
+  version = create_module_version(module_id, published, "published", payload.note or "manual publish")
+  return admin_response({
+    "module_id": module_id,
+    "status": "published",
+    "version": version,
+    "validation_errors": []
+  })
+
+
+@app.post("/admin/modules/{module_id}/validate")
+async def admin_validate_module(module_id: str, x_admin_token: str | None = Header(default=None)):
+  require_admin_token(x_admin_token)
+  candidate = get_module_draft(module_id) or structured_modules.get(module_id)
+  if not candidate:
+    candidate = ensure_default_structured(module_id)
+  errors = validate_module_for_publish(candidate)
+  return admin_response({
+    "module_id": module_id,
+    "valid": len(errors) == 0,
+    "errors": errors
+  })
 
 
 @app.post("/admin/modules/{module_id}/assets")
@@ -1413,9 +2360,11 @@ async def admin_add_module_asset(
   x_admin_token: str | None = Header(default=None)
 ):
   require_admin_token(x_admin_token)
-  structured = ensure_default_structured(module_id)
+  structured = get_module_draft(module_id) or structured_modules.get(module_id)
+  if not structured:
+    structured = ensure_default_structured(module_id)
   asset_id = payload.id or f"asset_{uuid4().hex[:8]}"
-  asset = StructuredAsset(
+  asset = CocAsset(
     id=asset_id,
     name=payload.name,
     type=payload.type,
@@ -1423,63 +2372,180 @@ async def admin_add_module_asset(
     description=payload.description
   )
   structured.assets = [*structured.assets, asset]
-  structured_modules[module_id] = structured
-  save_structured_module(module_id, structured)
-  return admin_response({"module_id": module_id, "asset": asset.model_dump()})
+  normalized = normalize_structured_module(module_id, structured, structured.source_type or "admin", "draft")
+  save_module_draft(module_id, normalized)
+  return admin_response({"module_id": module_id, "asset": asset.model_dump(), "draft": normalized.model_dump()})
 
 
 def evaluate_trigger_rule(
-  rule: StructuredTriggerRule,
+  rule: CocTriggerRule,
   state: dict,
   player_message: str,
   reply: dict
 ) -> bool:
-  game_state = state.get("game_state", {})
+  def compare_value(current: Any, expected: str, operator: str) -> bool:
+    current_text = "" if current is None else str(current)
+    if operator == "contains":
+      return expected in current_text
+    if operator == "gte":
+      try:
+        return float(current_text or 0) >= float(expected)
+      except ValueError:
+        return False
+    if operator == "lte":
+      try:
+        return float(current_text or 0) <= float(expected)
+      except ValueError:
+        return False
+    return current_text == expected
+
+  def get_state_value(key: str | None) -> Any:
+    if not key:
+      return None
+    if key in state:
+      return state.get(key)
+    return flags.get(key)
+
+  flags = state.get("flags", {})
   message_lower = player_message.lower()
+  discovered = set(state.get("discovered_clue_ids", []))
+  granted = set(state.get("granted_handout_ids", []))
   for condition in rule.conditions:
+    operator = condition.operator or "eq"
     if condition.type == "location":
-      current_location = str(state.get("location", ""))
-      value = str(condition.value)
-      if condition.operator == "contains":
-        if value not in current_location:
-          return False
-      elif current_location != value:
+      if not compare_value(state.get("current_location_id"), str(condition.value), operator):
+        return False
+    elif condition.type == "scene":
+      if not compare_value(state.get("current_scene_id"), str(condition.value), operator):
         return False
     elif condition.type == "action":
       value = str(condition.value).lower()
       if value not in message_lower:
         return False
     elif condition.type == "state":
-      if not condition.key:
+      current = get_state_value(condition.key)
+      if current is None:
         return False
-      current = game_state.get(condition.key)
-      value = condition.value
-      if condition.operator == "contains":
-        if value not in str(current):
-          return False
-      elif str(current) != value:
+      if not compare_value(current, condition.value, operator):
         return False
     elif condition.type == "check_result":
       value = str(condition.value).lower()
       if value not in json.dumps(reply, ensure_ascii=False).lower():
         return False
+    elif condition.type == "clue":
+      if condition.value not in discovered:
+        return False
+    elif condition.type == "handout":
+      if condition.value not in granted:
+        return False
+    elif condition.type == "time":
+      if not compare_value(state.get("time_progress"), str(condition.value), operator):
+        return False
   return True
+
+
+def add_handout_to_inventory(investigator_id: str | None, handout: CocHandout) -> None:
+  if not investigator_id or investigator_id not in characters:
+    return
+  investigator = characters[investigator_id]
+  inventory = investigator.get("inventory", [])
+  inventory.append({
+    "id": f"item_{uuid4().hex[:8]}",
+    "name": handout.title,
+    "category": "document",
+    "origin": "module",
+    "is_equipped": False,
+    "quantity": 1,
+    "description": handout.content,
+    "stats": {}
+  })
+  investigator["inventory"] = inventory
+  save_character_to_db(investigator)
+
+
+def evaluate_progress_condition(condition: str, state: dict[str, Any], player_message: str) -> bool:
+  text = condition.strip()
+  if not text:
+    return True
+  if ":" not in text:
+    return text.lower() in player_message.lower()
+  prefix, raw_value = text.split(":", 1)
+  value = raw_value.strip()
+  if prefix == "scene":
+    return str(state.get("current_scene_id") or "") == value
+  if prefix == "location":
+    return str(state.get("current_location_id") or "") == value
+  if prefix == "action":
+    return value.lower() in player_message.lower()
+  if prefix == "trigger":
+    return value in set(state.get("triggered_rule_ids", []))
+  if prefix == "flag":
+    key, _, expected = value.partition("=")
+    if not key:
+      return False
+    return str(state.get("flags", {}).get(key.strip())) == expected.strip()
+  return value.lower() in player_message.lower()
+
+
+def auto_reveal_clues(module: CocScenario, state: dict[str, Any], player_message: str) -> list[dict[str, Any]]:
+  discovered = state.setdefault("discovered_clue_ids", [])
+  triggered = set(state.get("triggered_rule_ids", []))
+  revealed: list[dict[str, Any]] = []
+  for clue in module.clues:
+    if clue.id in discovered:
+      continue
+    if clue.trigger_ref and clue.trigger_ref not in triggered:
+      continue
+    if not clue.discovery_conditions:
+      continue
+    if not all(
+      evaluate_progress_condition(condition, state, player_message)
+      for condition in clue.discovery_conditions
+    ):
+      continue
+    discovered.append(clue.id)
+    revealed.append(clue.model_dump())
+  state["discovered_clue_ids"] = discovered
+  return revealed
+
+
+def auto_grant_handouts(module: CocScenario, state: dict[str, Any], player_message: str, investigator_id: str | None) -> list[dict[str, Any]]:
+  granted = state.setdefault("granted_handout_ids", [])
+  granted_set = set(granted)
+  granted_payloads: list[dict[str, Any]] = []
+  for handout in module.handouts:
+    if handout.id in granted_set:
+      continue
+    if not handout.grant_conditions:
+      continue
+    if not all(
+      evaluate_progress_condition(condition, state, player_message)
+      for condition in handout.grant_conditions
+    ):
+      continue
+    granted.append(handout.id)
+    granted_set.add(handout.id)
+    granted_payloads.append(handout.model_dump())
+    if handout.add_to_inventory:
+      add_handout_to_inventory(investigator_id, handout)
+  state["granted_handout_ids"] = granted
+  return granted_payloads
 
 
 def apply_structured_triggers(
   session_id: str,
-  module: StructuredModule,
+  module: CocScenario,
   player_message: str,
   reply: dict
 ) -> dict:
-  state = session_states.setdefault(session_id, {})
-  discovered = state.setdefault("discovered_clues", [])
-  granted = state.setdefault("granted_handouts", [])
-  triggered = state.setdefault("triggered_rules", [])
+  state = get_session_state_record(session_id)
+  discovered = state.setdefault("discovered_clue_ids", [])
+  granted = state.setdefault("granted_handout_ids", [])
+  triggered = state.setdefault("triggered_rule_ids", [])
   revealed_clues: list[dict] = []
   granted_handouts: list[dict] = []
-  game_state = state.setdefault("game_state", {})
-  char_id = sessions.get(session_id, {}).get("character_id")
+  flags = state.setdefault("flags", {})
+  investigator_id = sessions.get(session_id, {}).get("investigator_id")
   for rule in module.triggers:
     if rule.once and rule.id in triggered:
       continue
@@ -1496,129 +2562,62 @@ def apply_structured_triggers(
         if handout and handout.id not in granted:
           granted.append(handout.id)
           granted_handouts.append(handout.model_dump())
-          if handout.add_to_inventory and char_id and char_id in characters:
-            char = characters[char_id]
-            inventory = char.get("inventory", [])
-            inventory.append({
-              "id": f"item_{uuid4().hex[:8]}",
-              "name": handout.title,
-              "category": "document",
-              "origin": "module",
-              "is_equipped": False,
-              "quantity": 1,
-              "description": handout.content,
-              "stats": {}
-            })
-            char["inventory"] = inventory
-            save_character_to_db(char)
+          if handout.add_to_inventory:
+            add_handout_to_inventory(investigator_id, handout)
       elif action.type == "update_state":
         payload = action.payload if isinstance(action.payload, dict) else {}
-        game_state.update(payload)
+        flags.update(payload)
+      elif action.type == "branch_scene" and action.target_id:
+        state["current_scene_id"] = action.target_id
+      elif action.type == "move_location" and action.target_id:
+        state["current_location_id"] = action.target_id
     triggered.append(rule.id)
-  state["discovered_clues"] = discovered
-  state["granted_handouts"] = granted
-  state["triggered_rules"] = triggered
-  state["game_state"] = game_state
+  state["discovered_clue_ids"] = discovered
+  state["granted_handout_ids"] = granted
+  state["triggered_rule_ids"] = triggered
+  state["flags"] = flags
+  sync_state_with_scene(module, state)
   return {"revealed_clues": revealed_clues, "granted_handouts": granted_handouts}
 
 
 @app.post("/characters")
 async def create_character(payload: CharacterCreate):
   character_id = payload.id or str(uuid4())
-  
-  # Logic to calculate initial stats
-  hp = 10
-  max_hp = 10
-  level = 1
-  xp = 0
-  san = 0
-  mp = 0
-  max_mp = 0
-  skill_marks = []
-  inventory = []
-  
-  stats = payload.stats or {}
-  
-  if payload.type == "dnd":
-      role_class = payload.class_
-      con = stats.get("constitution", 10)
-      int_val = stats.get("intelligence", 10)
-      con_mod = (con - 10) // 2
-      
-      class_cfg = DND_CLASS_CONFIG.get(role_class, DND_CLASS_CONFIG["战士"])
-      hp = class_cfg["hp_base"] + con_mod
-      max_hp = hp
-      
-      mp = 4 + (int_val - 10) // 2
-      max_mp = mp
-      
-      # Assign default equipment
-      import copy
-      default_eq = copy.deepcopy(class_cfg.get("default_equipment", []))
-      for item in default_eq:
-          item["id"] = f"item_{uuid4().hex[:8]}"
-      inventory.extend(default_eq)
-      
-  elif payload.type == "coc":
-      # CoC 7e Rule: HP = (CON + SIZ) / 10
-      con = stats.get("con", 50)
-      siz = stats.get("siz", 50)
-      pow_val = stats.get("pow", 50) # POW
-      
-      hp = (con + siz) // 10
-      max_hp = hp
-      san = pow_val
-      
-      mp = pow_val // 5
-      max_mp = mp
-      
-      level = 0 # CoC no levels
-      
-      # Assign default equipment
-      import copy
-      occupation = payload.occupation or "默认"
-      default_eq = copy.deepcopy(COC_OCCUPATION_CONFIG.get(occupation, COC_OCCUPATION_CONFIG["默认"]))
-      for item in default_eq:
-          item["id"] = f"item_{uuid4().hex[:8]}"
-      inventory.extend(default_eq)
+  import copy
 
-  # Merge any items sent from frontend (legacy support)
-  if payload.items:
-      for legacy_item in payload.items:
-          inventory.append({
-              "id": f"item_{uuid4().hex[:8]}",
-              "name": legacy_item.get("name", "未知物品"),
-              "category": legacy_item.get("category", "tool"),
-              "origin": "custom",
-              "is_equipped": False,
-              "quantity": legacy_item.get("quantity", 1),
-              "description": legacy_item.get("description", ""),
-              "stats": legacy_item.get("stats", {})
-          })
+  characteristics = payload.characteristics.model_dump()
+  con_value = characteristics.get("con") or 50
+  siz_value = characteristics.get("siz") or 50
+  pow_value = characteristics.get("pow") or 50
+  default_hp = max(1, (con_value + siz_value) // 10)
+  default_mp = max(0, pow_value // 5)
+  status_payload = payload.status.model_dump() if payload.status else {
+    "hp": build_status_track(default_hp, default_hp),
+    "mp": build_status_track(default_mp, default_mp),
+    "san": build_status_track(pow_value, pow_value),
+    "conditions": [],
+    "flags": {},
+  }
+  occupation = payload.profile.occupation or "默认"
+  inventory = copy.deepcopy(COC_OCCUPATION_CONFIG.get(occupation, COC_OCCUPATION_CONFIG["默认"]))
+  for item in inventory:
+    item["id"] = f"item_{uuid4().hex[:8]}"
+  inventory.extend([item.model_dump() for item in payload.inventory])
 
   data = {
     "id": character_id,
-    "name": payload.name,
-    "type": payload.type,
-    "race": payload.race,
-    "class": payload.class_,
-    "occupation": payload.occupation,
-    "age": payload.age,
-    "stats": stats,
-    "skills": payload.skills or [],
-    "inventory": inventory, # Replaces items
-    "backstory": payload.backstory,
+    "rule_system": "coc",
+    "profile": {
+      **payload.profile.model_dump(),
+      "avatar": payload.profile.avatar or "🕵️",
+    },
+    "characteristics": characteristics,
+    "skills": payload.skills,
+    "inventory": inventory,
+    "status": status_payload,
     "created_at": datetime.utcnow().isoformat(),
-    # New Stats
-    "level": level,
-    "xp": xp,
-    "hp": hp,
-    "maxHp": max_hp, # Frontend expects maxHp (camelCase)
-    "mp": mp,
-    "maxMp": max_mp, # Frontend expects maxMp (camelCase)
-    "san": san,
-    "skill_marks": skill_marks,
-    "avatar": "🧙" # Default avatar
+    "tags": [],
+    "extra": {},
   }
   characters[character_id] = data
   save_character_to_db(data)
@@ -1657,47 +2656,7 @@ async def add_xp(character_id: str, payload: XPUpdate):
     char = characters.get(character_id)
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
-    
-    if char.get("type") != "dnd":
-        raise HTTPException(status_code=400, detail="Only DND characters use XP")
-        
-    char["xp"] += payload.xp_delta
-    
-    # Check Level Up
-    current_level = char["level"]
-    new_level = current_level
-    
-    # Simple lookup for max level reached
-    for lvl in range(10, 0, -1):
-        if char["xp"] >= DND_LEVEL_XP.get(lvl, 999999):
-            new_level = lvl
-            break
-            
-    if new_level > current_level:
-        # Level Up Logic
-        char["level"] = new_level
-        
-        # HP Increase
-        role_class = char.get("class", "战士")
-        con = char.get("stats", {}).get("constitution", 10)
-        con_mod = (con - 10) // 2
-        class_cfg = DND_CLASS_CONFIG.get(role_class, DND_CLASS_CONFIG["战士"])
-        
-        levels_gained = new_level - current_level
-        hp_gain = (class_cfg["hp_level"] + con_mod) * levels_gained
-        
-        # Special case: Fighter Lv6 HP+5 (Extra)
-        if role_class == "战士" and current_level < 6 <= new_level:
-             hp_gain += 5
-             
-        char["maxHp"] += hp_gain
-        char["hp"] += hp_gain # Heal on level up
-        
-        # Attributes Increase (Lv4, Lv8)
-        pass
-
-    save_character_to_db(char)
-    return {"character": char, "level_up": new_level > current_level}
+    raise HTTPException(status_code=400, detail="当前版本仅支持 COC 调查员链路")
 
 @app.post("/characters/{character_id}/skill-check")
 async def skill_check(character_id: str, payload: SkillCheck):
@@ -1705,14 +2664,15 @@ async def skill_check(character_id: str, payload: SkillCheck):
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
         
-    if char["rule_set"] != "CoC":
+    if char.get("rule_system") != "coc":
         raise HTTPException(status_code=400, detail="Only CoC characters use Skill Marks")
         
     if payload.success:
-        marks = set(char.get("skill_marks", []))
+        flags = char.setdefault("status", {}).setdefault("flags", {})
+        marks = set(flags.get("skill_marks", []))
         if payload.skill_name not in marks:
             marks.add(payload.skill_name)
-            char["skill_marks"] = list(marks)
+            flags["skill_marks"] = list(marks)
             save_character_to_db(char)
             
     return {"character": char}
@@ -1723,36 +2683,15 @@ async def trigger_growth(character_id: str):
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
         
-    if char["rule_set"] != "CoC":
+    if char.get("rule_system") != "coc":
         raise HTTPException(status_code=400, detail="Only CoC characters use Growth")
         
-    marks = char.get("skill_marks", [])
+    marks = char.get("status", {}).get("flags", {}).get("skill_marks", [])
     if not marks:
         return {"message": "No skills marked for growth", "results": []}
         
     results = []
-    # Currently char skills is a list of strings ["Skill A", "Skill B"] or user input strings.
-    # Wait, frontend sends skills as list[str]. But CoC skills need values (1-100).
-    # In `CharacterCreate`, `skills` is list[str].
-    # In user requirement: "skills": {"spot_hidden": 40}.
-    # The current frontend implementation only stored names in `skills` array for display.
-    # We need to migrate `skills` to dict for CoC, or assume default values if missing?
-    # Let's check `create_character` implementation in frontend.
-    # Frontend: `skills` state is string array.
-    # We need to support values.
-    # For now, let's assume we store skill values in `attributes`? No, separate field.
-    # Hack: If `skills` is list, we treat them as having base value (e.g. 50) or look up from attributes if we merged them?
-    # Better: Update `skills` to be a Dict or List of Objects.
-    # But to avoid breaking existing frontend too much in one go, let's look at `attributes`.
-    # CoC attributes are stats. Skills are separate.
-    # Let's assume for this "Simplified" version, we track skill values in a new field `skill_values` or migrate `skills`.
-    # Given the user prompt example: "skills": {"spot_hidden": 40}.
-    
-    # We will try to read from `skill_values` if exists, else init from `skills` list with default (e.g. 50).
-    skill_values = char.get("skill_values", {})
-    if not skill_values and isinstance(char.get("skills"), list):
-        for s in char["skills"]:
-            skill_values[s] = 50 # Default starting skill
+    skill_values = char.get("skills", {})
     
     growth_log = []
     
@@ -1780,8 +2719,8 @@ async def trigger_growth(character_id: str):
                 "success": False
             })
             
-    char["skill_values"] = skill_values
-    char["skill_marks"] = [] # Reset marks
+    char["skills"] = skill_values
+    char.setdefault("status", {}).setdefault("flags", {})["skill_marks"] = []
     save_character_to_db(char)
     
     return {"results": growth_log, "character": char}
@@ -1793,52 +2732,42 @@ async def list_characters():
 
 @app.post("/sessions")
 async def create_session(payload: SessionCreate):
-  # Check if module exists in basic modules or structured modules
-  if payload.module_id not in modules and payload.module_id not in structured_modules:
-    # Try to load it if missing
-    try:
-      ensure_default_structured(payload.module_id)
-    except Exception:
-      raise HTTPException(status_code=404, detail=f"Module not found: {payload.module_id}")
+  try:
+    structured = ensure_default_structured(payload.scenario_id)
+  except HTTPException:
+    raise HTTPException(status_code=404, detail=f"Scenario not found: {payload.scenario_id}")
 
-  if payload.character_id not in characters:
-    raise HTTPException(status_code=404, detail="Character not found")
+  if payload.investigator_id not in characters:
+    raise HTTPException(status_code=404, detail="Investigator not found")
   
   session_id = str(uuid4())
+  initial_scene = get_sorted_scenes(structured)[0] if structured.sequence else None
+  initial_location_id = initial_scene.location_id if initial_scene and initial_scene.location_id else (location_ref(structured.locations[0]) if structured.locations else None)
   data = {
     "id": session_id,
-    "module_id": payload.module_id,
-    "character_id": payload.character_id,
+    "rule_system": "coc",
+    "scenario_id": payload.scenario_id,
+    "investigator_id": payload.investigator_id,
+    "started_at": datetime.utcnow().isoformat(),
+    "updated_at": datetime.utcnow().isoformat(),
     "user_id": payload.user_id,
-    "status": "active",
-    "created_at": datetime.utcnow().isoformat()
+    "state": {
+      "current_scene_id": initial_scene.id if initial_scene else None,
+      "current_location_id": initial_location_id,
+      "discovered_clue_ids": [],
+      "granted_handout_ids": [],
+      "triggered_rule_ids": [],
+      "flags": {"active_quest": initial_scene.title} if initial_scene else {},
+      "time_progress": None,
+    }
   }
   sessions[session_id] = data
-  
-  # Initial DM Intro
-  module_info = None
-  if payload.module_id in modules:
-      module_info = modules[payload.module_id].module_info
-  elif payload.module_id in structured_modules:
-      s_mod = structured_modules[payload.module_id]
-      # Create a dummy module info if only structured exists
-      module_info = ModuleInfo(name=s_mod.title, description=s_mod.background, tags=[])
-      
-  intro_message = f"{module_info.description}\n\n冒险者，请告诉我你的名字和来历。" if module_info else "欢迎来到未知模组。\n\n冒险者，请告诉我你的名字和来历。"
-  
-  game_logs[session_id] = [
-      ChatMessage(role="ai", content=intro_message)
+  sync_state_with_scene(structured, data["state"])
+  intro_message = build_session_intro_message(structured, data["state"])
+
+  session_logs[session_id] = [
+      CocChatMessage(role="ai", content=intro_message)
   ]
-  
-  structured = ensure_default_structured(payload.module_id)
-  session_states[session_id] = {
-    "location": structured.locations[0].name if structured.locations else "",
-    "quest": structured.quests[0].name if structured.quests else None,
-    "game_state": {},
-    "discovered_clues": [],
-    "granted_handouts": [],
-    "triggered_rules": []
-  }
   return {"session": data}
 
 
@@ -1847,13 +2776,57 @@ async def get_session(session_id: str):
   session = sessions.get(session_id)
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
-    
-  # Inject current character data into session info so frontend has it
-  char_id = session.get("character_id")
-  if char_id and char_id in characters:
-      session["character"] = characters[char_id]
-      
-  return {"session": session}
+
+  investigator_id = session.get("investigator_id")
+  investigator = characters.get(investigator_id) if investigator_id else None
+  state = get_session_state_record(session_id)
+  sync_state_with_scene(ensure_default_structured(session["scenario_id"]), state)
+  return {
+    "session": {
+      **session,
+      "state": serialize_player_state(state),
+    },
+    "investigator": investigator
+  }
+
+
+def serialize_session_runtime(session_id: str) -> dict[str, Any]:
+  session = sessions[session_id]
+  module = ensure_default_structured(session["scenario_id"])
+  state = get_session_state_record(session_id)
+  sync_state_with_scene(module, state)
+  current_scene = get_current_scene(module, state)
+  current_location = get_location_by_id(module, state.get("current_location_id"))
+  flags = state.get("flags", {})
+  visible_location_ids = set(
+    item for item in (flags.get("visible_location_ids", []) if isinstance(flags, dict) else [])
+    if isinstance(item, str) and item
+  )
+  visited_scene_ids = set(
+    item for item in (flags.get("visited_scene_ids", []) if isinstance(flags, dict) else [])
+    if isinstance(item, str) and item
+  )
+  scene_progress = []
+  for scene in get_sorted_scenes(module):
+    if scene.id not in visited_scene_ids:
+      continue
+    status = "active" if current_scene and scene.id == current_scene.id else "completed"
+    scene_progress.append(serialize_player_scene(scene, status))
+  visible_locations = [
+    serialize_player_location(location)
+    for location in module.locations
+    if location_ref(location) in visible_location_ids
+  ]
+  return {
+    "scenario": serialize_player_scenario(module),
+    "current_scene": serialize_player_scene(current_scene, "active") if current_scene else None,
+    "current_location": serialize_player_location(current_location) if current_location else None,
+    "locations": visible_locations,
+    "scene_items": [],
+    "discovered_clues": [clue.model_dump() for clue in get_discovered_clues(module, state)],
+    "granted_handouts": [handout.model_dump() for handout in get_granted_handouts(module, state)],
+    "scenes": scene_progress
+  }
 
 
 @app.get("/sessions/{session_id}/state")
@@ -1862,32 +2835,30 @@ async def get_session_state(session_id: str):
     raise HTTPException(status_code=404, detail="Session not found")
   return {
     "messages": [item.model_dump() for item in get_recent_messages(session_id)],
-    "state": session_states.get(session_id, {})
+    "state": serialize_player_state(get_session_state_record(session_id)),
+    **serialize_session_runtime(session_id)
   }
+
+
+@app.post("/sessions/{session_id}/checks")
+async def resolve_session_check(session_id: str, payload: CheckResolutionRequest):
+  session = sessions.get(session_id)
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+  investigator = characters.get(session["investigator_id"])
+  if not investigator:
+    raise HTTPException(status_code=404, detail="Investigator not found")
+  result = evaluate_coc_check(investigator, payload.check, payload.roll_value)
+  return {"result": result.model_dump()}
 
 
 @app.post("/gm/action")
 async def gm_action(payload: ActionRequest):
-  if payload.location or payload.quest or payload.game_state:
-    state = session_states.setdefault(payload.session_id, {})
-    if payload.location or payload.quest:
-      session = sessions.get(payload.session_id)
-      if session:
-        module = ensure_default_structured(session["module_id"])
-        if payload.location and any(
-          item.name == payload.location for item in module.locations
-        ):
-          state["location"] = payload.location
-        if payload.quest and any(item.name == payload.quest for item in module.quests):
-          state["quest"] = payload.quest
-    if payload.game_state and isinstance(payload.game_state, dict):
-      merged = state.get("game_state", {})
-      if isinstance(merged, dict):
-        merged.update(payload.game_state)
-        state["game_state"] = merged
-    if payload.player_character and isinstance(payload.player_character, dict):
-      state["player_character"] = payload.player_character
-  reply = await generate_ai_reply(payload.session_id, payload.message)
+  reply = await generate_ai_reply(
+    payload.session_id,
+    payload.message,
+    payload.check_result.model_dump() if payload.check_result else None,
+  )
   return {"result": reply}
 
 
@@ -1896,7 +2867,7 @@ async def gm_action_external(payload: ExternalActionRequest):
   session = sessions.get(payload.session_id)
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")
-  module = ensure_default_structured(session["module_id"])
+  module = ensure_default_structured(session["scenario_id"])
   append_message(payload.session_id, "player", payload.player_action)
   
   result_data = payload.result
@@ -1907,20 +2878,13 @@ async def gm_action_external(payload: ExternalActionRequest):
       result_data = {"narration": result_data}
   
   reply = normalize_ai_reply(module, result_data)
+  reply = enforce_check_result_consistency(reply, reply.get("check_result"))
   append_message(payload.session_id, "ai", reply["narration"])
-  location_change = reply["location_change"]
-  quest_update = reply["quest_update"]
-  state_update = reply["state_update"]
-  next_state = session_states.setdefault(payload.session_id, {})
-  if location_change:
-    next_state["location"] = location_change
-  if quest_update:
-    next_state["quest"] = quest_update
-  if state_update:
-    merged = next_state.get("game_state", {})
-    if isinstance(merged, dict):
-      merged.update(state_update)
-      next_state["game_state"] = merged
+  trigger_outcome = apply_reply_to_session(payload.session_id, module, payload.player_action, reply)
+  if trigger_outcome["revealed_clues"]:
+    reply["revealed_clues"] = trigger_outcome["revealed_clues"]
+  if trigger_outcome["granted_handouts"]:
+    reply["granted_handouts"] = trigger_outcome["granted_handouts"]
   return {"result": reply}
 
 
@@ -1942,3 +2906,4 @@ async def startup_event():
   init_db()
   load_structured_modules()
   load_characters_from_db()
+  write_seed_scenario_to_system()

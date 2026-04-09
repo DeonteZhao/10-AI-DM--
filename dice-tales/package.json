@@ -8,6 +8,7 @@
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev\" --names \"BACK,FRONT\" --prefix-colors \"magenta,cyan\"",
     "build": "next build",
     "start": "next start",
+    "start:frontend:prod": "next start",
     "lint": "eslint ."
   },
   "dependencies": {

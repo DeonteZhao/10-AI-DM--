@@ -14,7 +14,7 @@ import {
   Star,
   Sword,
 } from '@phosphor-icons/react';
-import type { CocInvestigatorRecord, CocItem } from '@/lib/domain/coc';
+import { normalizeCocSkillMap, type CocInvestigatorRecord, type CocItem } from '@/lib/domain/coc';
 
 function getItemIcon(item: CocItem) {
   if (item.category === 'weapon') return <Sword className="w-5 h-5" weight="fill" />;
@@ -39,6 +39,7 @@ export function CharacterPanel({
 }) {
   const [isMounted, setIsMounted] = useState(false);
   const [openSection, setOpenSection] = useState<string>('stats');
+  const normalizedSkills = useMemo(() => normalizeCocSkillMap(character.skills), [character.skills]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -211,12 +212,12 @@ export function CharacterPanel({
         </button>
         {openSection === 'skills' && (
           <div className="px-4 pb-5 pt-5 flex flex-wrap gap-3 border-t-[3px] border-[var(--ink-color)] bg-[var(--paper-light)]">
-            {Object.entries(character.skills).map(([skill, value]) => (
+            {Object.entries(normalizedSkills).map(([skill, value]) => (
               <span key={skill} className="px-3 py-1.5 bg-theme-bg border-[2px] border-[var(--ink-color)] font-bold uppercase shadow-[2px_2px_0_var(--ink-color)] hover:-translate-y-0.5 transition-transform cursor-default flex gap-2 items-center tracking-widest">
                 {skill} <span className="text-[var(--accent-color)] font-black font-vt323">{value}</span>
               </span>
             ))}
-            {Object.keys(character.skills).length === 0 && (
+            {Object.keys(normalizedSkills).length === 0 && (
               <div className="text-sm opacity-50 font-bold text-center py-4 tracking-widest w-full">暂无技能分配</div>
             )}
           </div>

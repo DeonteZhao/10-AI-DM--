@@ -57,7 +57,7 @@ from backend.domain.coc.core import (
   SkillCheck,
   XPUpdate,
 )
-from backend.seed_coc_scenario import MODULE_ID as BASELINE_MODULE_ID, write_seed_scenario_to_system
+from backend.seed_coc_scenario import MODULE_ID as BASELINE_MODULE_ID, default_docx_path, write_seed_scenario_to_system
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -244,6 +244,41 @@ def normalize_inventory_items(raw_inventory: Any) -> list[dict[str, Any]]:
   return normalized
 
 
+COC_SKILL_NAME_ALIASES = {
+  "射击(手枪)": "射击",
+  "射击（手枪）": "射击",
+  "科学(生物学)": "科学",
+  "科学（生物学）": "科学",
+  "科学(药学)": "科学",
+  "科学（药学）": "科学",
+  "艺术/手艺(摄影)": "艺术/手艺",
+  "艺术/手艺（摄影）": "艺术/手艺",
+  "艺术/手艺(文学)": "艺术/手艺",
+  "艺术/手艺（文学）": "艺术/手艺",
+}
+
+
+def normalize_coc_skill_name(skill: str) -> str:
+  return COC_SKILL_NAME_ALIASES.get(skill, skill)
+
+
+def normalize_coc_skill_map(raw_skills: Any) -> dict[str, int]:
+  if not isinstance(raw_skills, dict):
+    return {}
+  normalized: dict[str, int] = {}
+  for skill, value in raw_skills.items():
+    if not isinstance(skill, str):
+      continue
+    if not isinstance(value, (int, float)):
+      continue
+    numeric_value = int(value)
+    if numeric_value <= 0:
+      continue
+    canonical_skill = normalize_coc_skill_name(skill)
+    normalized[canonical_skill] = max(normalized.get(canonical_skill, 0), numeric_value)
+  return normalized
+
+
 def normalize_character_record(raw_character: dict[str, Any]) -> dict[str, Any]:
   profile = raw_character.get("profile") if isinstance(raw_character.get("profile"), dict) else {}
   characteristics = raw_character.get("characteristics") if isinstance(raw_character.get("characteristics"), dict) else {}
@@ -276,7 +311,7 @@ def normalize_character_record(raw_character: dict[str, Any]) -> dict[str, Any]:
     "rule_system": "coc",
     "profile": normalized_profile,
     "characteristics": characteristics,
-    "skills": raw_character.get("skills") if isinstance(raw_character.get("skills"), dict) else {},
+    "skills": normalize_coc_skill_map(raw_character.get("skills")),
     "inventory": normalize_inventory_items(raw_character.get("inventory")),
     "status": status,
     "created_at": raw_character.get("created_at") or now_iso(),
@@ -3269,7 +3304,7 @@ async def create_character(payload: CharacterCreate):
       "avatar": payload.profile.avatar or "🕵️",
     },
     "characteristics": characteristics,
-    "skills": payload.skills,
+    "skills": normalize_coc_skill_map(payload.skills),
     "inventory": inventory,
     "status": status_payload,
     "created_at": now_iso(),
@@ -3563,4 +3598,5 @@ async def startup_event():
   init_db()
   load_structured_modules()
   load_characters_from_db()
-  write_seed_scenario_to_system()
+  if default_docx_path().exists():
+    write_seed_scenario_to_system()

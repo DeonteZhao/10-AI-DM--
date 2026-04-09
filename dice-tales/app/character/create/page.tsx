@@ -5,67 +5,19 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, CaretLeft, CaretRight, DiceFive } from "@phosphor-icons/react";
 import { useBetaAccess } from "@/components/BetaAccessGate";
 import {
+  COC_BASE_SKILLS,
   COC_BASELINE_MODULE_ID,
   COC_BASELINE_MODULE_NAME,
+  COC_OCCUPATION_DETAILS,
+  COC_OCCUPATIONS,
   type CocCharacteristics,
   type CocInvestigatorCreatePayload,
   type CocModuleSummary,
+  getCocSkillBaseValue,
+  normalizeCocSkillMap,
 } from "@/lib/domain/coc";
 
 type Step = "basic" | "stats" | "skills" | "confirm";
-
-type OccupationDetail = {
-  skills: string[];
-  creditRating: [number, number];
-  pointFormula: "EDU*4" | "EDU*2+(STR|DEX)*2";
-};
-
-const OCCUPATION_DETAILS: Record<string, OccupationDetail> = {
-  私家侦探: { skills: ["艺术/手艺(摄影)", "乔装", "法律", "图书馆利用", "聆听", "心理学", "侦查"], creditRating: [9, 30], pointFormula: "EDU*2+(STR|DEX)*2" },
-  教授: { skills: ["图书馆利用", "其他语言", "母语", "心理学", "外语"], creditRating: [20, 70], pointFormula: "EDU*4" },
-  记者: { skills: ["艺术/手艺(摄影)", "历史", "图书馆利用", "母语", "心理学"], creditRating: [9, 30], pointFormula: "EDU*4" },
-  医生: { skills: ["急救", "医学", "拉丁语", "心理学", "科学(生物学)", "科学(药学)"], creditRating: [30, 80], pointFormula: "EDU*4" },
-  作家: { skills: ["艺术/手艺(文学)", "历史", "图书馆利用", "自然界", "外语", "心理学"], creditRating: [9, 30], pointFormula: "EDU*4" },
-  古董商: { skills: ["估价", "艺术/手艺", "历史", "图书馆利用", "外语", "侦查"], creditRating: [30, 70], pointFormula: "EDU*4" },
-  警察: { skills: ["斗殴", "射击(手枪)", "急救", "法律", "心理学", "侦查"], creditRating: [9, 30], pointFormula: "EDU*2+(STR|DEX)*2" },
-  图书管理员: { skills: ["会计", "图书馆利用", "外语", "母语"], creditRating: [9, 30], pointFormula: "EDU*4" },
-};
-
-const OCCUPATIONS = Object.keys(OCCUPATION_DETAILS);
-
-const BASE_SKILLS: Record<string, number> = {
-  侦查: 25,
-  图书馆利用: 20,
-  聆听: 20,
-  心理学: 10,
-  急救: 30,
-  潜行: 20,
-  斗殴: 25,
-  "射击(手枪)": 20,
-  闪避: 0,
-  话术: 5,
-  说服: 10,
-  恐吓: 15,
-  魅力: 15,
-  历史: 5,
-  医学: 1,
-  自然界: 10,
-  "科学(生物学)": 1,
-  "科学(药学)": 1,
-  "艺术/手艺(摄影)": 5,
-  "艺术/手艺(文学)": 5,
-  乔装: 5,
-  法律: 5,
-  外语: 1,
-  母语: 0,
-  估价: 5,
-  机械维修: 10,
-  电气维修: 10,
-  信用评级: 0,
-  拉丁语: 1,
-  其他语言: 1,
-  会计: 5,
-};
 
 const STEP_LABELS: Record<Step, string> = {
   basic: "基本信息",
@@ -95,16 +47,6 @@ const createRolledCharacteristics = (): CocCharacteristics => {
   return next;
 };
 
-function getSkillBaseValue(skill: string, characteristics: CocCharacteristics) {
-  if (skill === "闪避") {
-    return Math.floor((characteristics.dex || 0) / 2);
-  }
-  if (skill === "母语") {
-    return characteristics.edu || 0;
-  }
-  return BASE_SKILLS[skill] || 0;
-}
-
 function CharacterCreateContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -117,7 +59,7 @@ function CharacterCreateContent() {
 
   const [step, setStep] = useState<Step>("basic");
   const [name, setName] = useState("");
-  const [occupation, setOccupation] = useState(OCCUPATIONS[0]);
+  const [occupation, setOccupation] = useState(COC_OCCUPATIONS[0]);
   const [age, setAge] = useState(25);
   const [characteristics, setCharacteristics] = useState<CocCharacteristics>({});
   const [allocations, setAllocations] = useState<Record<string, { occ: number; per: number }>>({});
@@ -166,7 +108,28 @@ function CharacterCreateContent() {
     };
   }, [isReady, requestedModuleId]);
 
-  const occupationDetail = OCCUPATION_DETAILS[occupation];
+  const occupationDetail = COC_OCCUPATION_DETAILS[occupation];
+
+  useEffect(() => {
+    setAllocations((prev) => {
+      let changed = false;
+      const next: Record<string, { occ: number; per: number }> = {};
+      Object.entries(prev).forEach(([skill, value]) => {
+        const isOccupationSkill = occupationDetail.skills.includes(skill);
+        const normalized = {
+          occ: isOccupationSkill ? value.occ : 0,
+          per: value.per,
+        };
+        if (normalized.occ !== value.occ) {
+          changed = true;
+        }
+        if (normalized.occ > 0 || normalized.per > 0) {
+          next[skill] = normalized;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [occupationDetail.skills]);
   const occPointsTotal = useMemo(() => {
     if (!characteristics.edu) {
       return 0;
@@ -189,6 +152,9 @@ function CharacterCreateContent() {
   };
 
   const adjustSkill = (skill: string, target: "occ" | "per", delta: number) => {
+    if (target === "occ" && delta > 0 && !occupationDetail.skills.includes(skill)) {
+      return;
+    }
     setAllocations((prev) => {
       const current = prev[skill] || { occ: 0, per: 0 };
       const nextValue = current[target] + delta;
@@ -205,7 +171,7 @@ function CharacterCreateContent() {
       }
       const nextOcc = target === "occ" ? nextValue : current.occ;
       const nextPer = target === "per" ? nextValue : current.per;
-      const total = getSkillBaseValue(skill, characteristics) + nextOcc + nextPer;
+      const total = getCocSkillBaseValue(skill, characteristics) + nextOcc + nextPer;
       if (delta > 0 && total > 99) {
         return prev;
       }
@@ -226,12 +192,12 @@ function CharacterCreateContent() {
   const finalSkills = useMemo(() => {
     const next: Record<string, number> = {};
     Object.entries(allocations).forEach(([skill, value]) => {
-      const total = getSkillBaseValue(skill, characteristics) + value.occ + value.per;
+      const total = getCocSkillBaseValue(skill, characteristics) + value.occ + value.per;
       if (total > 0) {
         next[skill] = total;
       }
     });
-    return next;
+    return normalizeCocSkillMap(next);
   }, [allocations, characteristics]);
 
   const maxHp = Math.max(1, Math.floor(((characteristics.con || 0) + (characteristics.siz || 0)) / 10));
@@ -369,7 +335,7 @@ function CharacterCreateContent() {
                     onChange={(event) => setOccupation(event.target.value)}
                     className="w-full bg-theme-bg border-[3px] border-[var(--ink-color)] p-4 font-bold text-xl focus:outline-none focus:shadow-[4px_4px_0_var(--ink-color)] transition-all font-huiwen text-[var(--ink-color)] cursor-pointer"
                   >
-                    {OCCUPATIONS.map((item) => (
+                    {COC_OCCUPATIONS.map((item) => (
                       <option key={item} value={item}>{item}</option>
                     ))}
                   </select>
@@ -445,9 +411,9 @@ function CharacterCreateContent() {
               </p>
             </div>
             <div className="grid gap-4">
-              {Object.keys(BASE_SKILLS).map((skill) => {
+              {Object.keys(COC_BASE_SKILLS).map((skill) => {
                 const allocation = allocations[skill] || { occ: 0, per: 0 };
-                const base = getSkillBaseValue(skill, characteristics);
+                const base = getCocSkillBaseValue(skill, characteristics);
                 const total = base + allocation.occ + allocation.per;
                 const isOccupationSkill = occupationDetail.skills.includes(skill);
                 return (
@@ -461,9 +427,9 @@ function CharacterCreateContent() {
                       </div>
                       <div className="flex items-center gap-6">
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => adjustSkill(skill, "occ", -5)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">-</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "occ", -5)} disabled={!isOccupationSkill && allocation.occ === 0} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">-</button>
                           <span className="min-w-16 text-center font-black tracking-widest">本职 {allocation.occ}</span>
-                          <button type="button" onClick={() => adjustSkill(skill, "occ", 5)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">+</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "occ", 5)} disabled={!isOccupationSkill} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">+</button>
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => adjustSkill(skill, "per", -5)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">-</button>

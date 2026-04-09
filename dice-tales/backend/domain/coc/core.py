@@ -312,6 +312,52 @@ class ModulePublishRequest(BaseModel):
   note: str | None = None
 
 
+class BetaEmailOtpSendRequest(BaseModel):
+  email: str
+
+
+class BetaEmailOtpSendResult(BaseModel):
+  status: Literal["otp_sent", "waitlist_required"]
+  email: str
+  historical_user: bool = False
+  waitlist_open: bool = False
+  expires_in_seconds: int | None = None
+  resend_available_in_seconds: int | None = None
+
+
+class BetaEmailOtpVerifyRequest(BaseModel):
+  email: str
+  code: str
+
+
+class BetaAccessCredential(BaseModel):
+  token: str
+  expires_at: str
+
+
+class BetaAccessSessionResult(BaseModel):
+  email: str
+  authenticated: bool = True
+  expires_at: str
+
+
+class BetaEmailOtpVerifyResult(BaseModel):
+  email: str
+  verified: bool = True
+  credential: BetaAccessCredential
+
+
+class BetaWaitlistRequest(BaseModel):
+  email: str
+  source_status: str | None = None
+
+
+class BetaWaitlistResult(BaseModel):
+  email: str
+  status: Literal["active"] = "active"
+  created: bool
+
+
 class CharacterCreate(BaseModel):
   id: str | None = None
   profile: CocCharacterProfile

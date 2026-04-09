@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { VT323 } from "next/font/google";
 import "./globals.css";
+import { BetaAccessGate } from "@/components/BetaAccessGate";
 import { Navbar } from "@/components/Navbar";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { BETA_ACCESS_STATE_HEADER } from "@/lib/beta-access";
 
 const vt323 = VT323({ weight: '400', subsets: ["latin"], variable: '--font-vt323' });
 
@@ -16,6 +19,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const initialAccessGranted = headers().get(BETA_ACCESS_STATE_HEADER) === "verified";
+
   return (
     <html lang="zh">
       <body className={`${vt323.variable} font-serif`} data-theme="hub">
@@ -38,8 +43,10 @@ export default function RootLayout({
         
         <div className="relative z-10 print-effect-container">
           <ThemeProvider>
-            <Navbar />
-            {children}
+            <BetaAccessGate initialAccessGranted={initialAccessGranted}>
+              <Navbar />
+              {children}
+            </BetaAccessGate>
           </ThemeProvider>
         </div>
       </body>

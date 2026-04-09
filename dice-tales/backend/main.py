@@ -1,8 +1,16 @@
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+import hashlib
+import hmac
 import json
+import math
 import os
+import re
+import secrets
 import sqlite3
+import smtplib
+import ssl
 import zipfile
 import xml.etree.ElementTree as ET
 from typing import Any, Awaitable, Callable, Dict, Literal
@@ -19,6 +27,14 @@ from backend.domain.coc.core import (
   AdminAssetCreate,
   CharacterCreate,
   CheckResolutionRequest,
+  BetaAccessCredential,
+  BetaAccessSessionResult,
+  BetaEmailOtpSendRequest,
+  BetaEmailOtpSendResult,
+  BetaEmailOtpVerifyRequest,
+  BetaEmailOtpVerifyResult,
+  BetaWaitlistRequest,
+  BetaWaitlistResult,
   CocCheckRequest,
   CocCheckResult,
   CocAsset,
@@ -112,6 +128,7 @@ IMPORT_RESULT_SOURCE_LABELS = {
 }
 
 UNSET = object()
+BETA_ACCESS_EMAIL_PATTERN = re.compile(r"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
 
 
 class ImportPipelineError(Exception):
@@ -298,7 +315,7 @@ def load_characters_from_db() -> None:
 
 
 def now_iso() -> str:
-  return datetime.utcnow().isoformat()
+  return datetime.now(timezone.utc).isoformat()
 
 
 def summarize_import_payload(payload: Any, limit: int = 320) -> str | None:
@@ -428,6 +445,18 @@ def init_db() -> None:
     )
     conn.execute(
       "create table if not exists characters (id text primary key, name text not null, data text not null, created_at text not null)"
+    )
+    conn.execute(
+      "create table if not exists beta_access_emails (email text primary key, is_verified integer not null default 0, first_verified_at text, last_verified_at text, last_login_at text, last_otp_requested_at text, last_otp_sent_at text, last_waitlist_at text, waitlist_status text, created_at text not null, updated_at text not null)"
+    )
+    conn.execute(
+      "create table if not exists beta_access_otps (otp_id text primary key, email text not null, code_hash text not null, status text not null, expires_at text not null, requested_at text not null, sent_at text, verified_at text, superseded_at text, failure_reason text, attempt_count integer not null default 0)"
+    )
+    conn.execute(
+      "create table if not exists beta_access_tokens (token_id text primary key, email text not null, token_hash text not null unique, status text not null, created_at text not null, expires_at text not null, last_used_at text, revoked_at text)"
+    )
+    conn.execute(
+      "create table if not exists beta_waitlist (email text primary key, status text not null, source_status text, first_requested_at text not null, last_requested_at text not null, created_at text not null, updated_at text not null)"
     )
     conn.commit()
 
@@ -660,6 +689,493 @@ def get_latest_import_summary_map() -> dict[str, dict[str, Any]]:
       "updated_at": row[11]
     }, include_payload=False)
   return summary_map
+
+
+def env_int(name: str, default: int, minimum: int = 1) -> int:
+  raw_value = os.getenv(name, str(default)).strip()
+  try:
+    parsed = int(raw_value)
+  except ValueError:
+    return default
+  return max(minimum, parsed)
+
+
+def beta_access_email_limit() -> int:
+  return env_int("BETA_ACCESS_EMAIL_LIMIT", 100)
+
+
+def beta_access_otp_ttl_seconds() -> int:
+  return env_int("BETA_ACCESS_OTP_TTL_SECONDS", 600)
+
+
+def beta_access_otp_resend_cooldown_seconds() -> int:
+  return env_int("BETA_ACCESS_OTP_RESEND_COOLDOWN_SECONDS", 60)
+
+
+def beta_access_otp_send_window_seconds() -> int:
+  return env_int("BETA_ACCESS_OTP_SEND_WINDOW_SECONDS", 3600)
+
+
+def beta_access_otp_send_limit_per_window() -> int:
+  return env_int("BETA_ACCESS_OTP_SEND_LIMIT_PER_WINDOW", 5)
+
+
+def beta_access_token_ttl_days() -> int:
+  return env_int("BETA_ACCESS_TOKEN_TTL_DAYS", 30)
+
+
+def future_iso(*, seconds: int = 0, days: int = 0) -> str:
+  return (datetime.now(timezone.utc) + timedelta(seconds=seconds, days=days)).isoformat()
+
+
+def hash_secret(value: str) -> str:
+  return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def normalize_beta_email(email: str) -> str:
+  normalized = email.strip().lower()
+  if not normalized or not BETA_ACCESS_EMAIL_PATTERN.fullmatch(normalized):
+    raise HTTPException(status_code=400, detail="邮箱格式无效")
+  return normalized
+
+
+def beta_access_otp_subject() -> str:
+  subject = os.getenv("EMAIL_OTP_SUBJECT", "Dice Tales 内测验证码").strip()
+  return subject or "Dice Tales 内测验证码"
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+  try:
+    parsed = datetime.fromisoformat(value)
+  except ValueError:
+    return None
+  if parsed.tzinfo is None:
+    return parsed.replace(tzinfo=timezone.utc)
+  return parsed
+
+
+def seconds_until_datetime(target: datetime | None) -> int | None:
+  if target is None:
+    return None
+  remaining = (target - datetime.now(timezone.utc)).total_seconds()
+  if remaining <= 0:
+    return 0
+  return math.ceil(remaining)
+
+
+def get_beta_access_email_record(email: str) -> dict[str, Any] | None:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select email, is_verified, first_verified_at, last_verified_at, last_login_at, last_otp_requested_at, last_otp_sent_at, last_waitlist_at, waitlist_status, created_at, updated_at from beta_access_emails where email = ?",
+      (email,)
+    ).fetchone()
+  if not row:
+    return None
+  return {
+    "email": row[0],
+    "is_verified": bool(row[1]),
+    "first_verified_at": row[2],
+    "last_verified_at": row[3],
+    "last_login_at": row[4],
+    "last_otp_requested_at": row[5],
+    "last_otp_sent_at": row[6],
+    "last_waitlist_at": row[7],
+    "waitlist_status": row[8],
+    "created_at": row[9],
+    "updated_at": row[10]
+  }
+
+
+def ensure_beta_access_email_record(email: str) -> dict[str, Any]:
+  existing = get_beta_access_email_record(email)
+  if existing:
+    return existing
+  created_at = now_iso()
+  return {
+    "email": email,
+    "is_verified": False,
+    "first_verified_at": None,
+    "last_verified_at": None,
+    "last_login_at": None,
+    "last_otp_requested_at": None,
+    "last_otp_sent_at": None,
+    "last_waitlist_at": None,
+    "waitlist_status": None,
+    "created_at": created_at,
+    "updated_at": created_at
+  }
+
+
+def save_beta_access_email_record(record: dict[str, Any]) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "insert into beta_access_emails (email, is_verified, first_verified_at, last_verified_at, last_login_at, last_otp_requested_at, last_otp_sent_at, last_waitlist_at, waitlist_status, created_at, updated_at) "
+      "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+      "on conflict(email) do update set is_verified=excluded.is_verified, first_verified_at=excluded.first_verified_at, last_verified_at=excluded.last_verified_at, last_login_at=excluded.last_login_at, last_otp_requested_at=excluded.last_otp_requested_at, last_otp_sent_at=excluded.last_otp_sent_at, last_waitlist_at=excluded.last_waitlist_at, waitlist_status=excluded.waitlist_status, created_at=excluded.created_at, updated_at=excluded.updated_at",
+      (
+        record["email"],
+        1 if record["is_verified"] else 0,
+        record["first_verified_at"],
+        record["last_verified_at"],
+        record["last_login_at"],
+        record["last_otp_requested_at"],
+        record["last_otp_sent_at"],
+        record["last_waitlist_at"],
+        record["waitlist_status"],
+        record["created_at"],
+        record["updated_at"]
+      )
+    )
+    conn.commit()
+
+
+def count_verified_beta_access_emails() -> int:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute("select count(*) from beta_access_emails where is_verified = 1").fetchone()
+  return int(row[0]) if row else 0
+
+
+def get_beta_access_resend_available_in_seconds(access_record: dict[str, Any]) -> int:
+  cooldown_seconds = max(0, beta_access_otp_resend_cooldown_seconds())
+  if cooldown_seconds <= 0:
+    return 0
+  last_sent_at = parse_iso_datetime(access_record.get("last_otp_sent_at") or "")
+  if last_sent_at is None:
+    return 0
+  remaining = seconds_until_datetime(last_sent_at + timedelta(seconds=cooldown_seconds))
+  return remaining or 0
+
+
+def create_beta_access_otp(email: str, code: str) -> dict[str, Any]:
+  otp_id = f"otp_{uuid4().hex[:12]}"
+  requested_at = now_iso()
+  expires_at = future_iso(seconds=beta_access_otp_ttl_seconds())
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set status = 'superseded', superseded_at = ?, failure_reason = coalesce(failure_reason, 'replaced_by_new_code') where email = ? and status in ('pending', 'sent')",
+      (requested_at, email)
+    )
+    conn.execute(
+      "insert into beta_access_otps (otp_id, email, code_hash, status, expires_at, requested_at, sent_at, verified_at, superseded_at, failure_reason, attempt_count) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      (otp_id, email, hash_secret(code), "pending", expires_at, requested_at, None, None, None, None, 0)
+    )
+    conn.commit()
+  return {
+    "otp_id": otp_id,
+    "email": email,
+    "status": "pending",
+    "expires_at": expires_at,
+    "requested_at": requested_at
+  }
+
+
+def mark_beta_access_otp_sent(otp_id: str) -> None:
+  sent_at = now_iso()
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set status = 'sent', sent_at = ? where otp_id = ? and status = 'pending'",
+      (sent_at, otp_id)
+    )
+    conn.commit()
+
+
+def mark_beta_access_otp_failed(otp_id: str, failure_reason: str) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set status = 'failed', failure_reason = ? where otp_id = ?",
+      (failure_reason, otp_id)
+    )
+    conn.commit()
+
+
+def get_latest_active_beta_access_otp(email: str) -> dict[str, Any] | None:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select otp_id, email, code_hash, status, expires_at, requested_at, sent_at, verified_at, superseded_at, failure_reason, attempt_count from beta_access_otps where email = ? and status in ('pending', 'sent') order by requested_at desc limit 1",
+      (email,)
+    ).fetchone()
+  if not row:
+    return None
+  return {
+    "otp_id": row[0],
+    "email": row[1],
+    "code_hash": row[2],
+    "status": row[3],
+    "expires_at": row[4],
+    "requested_at": row[5],
+    "sent_at": row[6],
+    "verified_at": row[7],
+    "superseded_at": row[8],
+    "failure_reason": row[9],
+    "attempt_count": row[10]
+  }
+
+
+def get_beta_access_active_otp_remaining_seconds(email: str) -> int | None:
+  otp_record = get_latest_active_beta_access_otp(email)
+  if not otp_record:
+    return None
+  expires_at = parse_iso_datetime(otp_record["expires_at"])
+  remaining = seconds_until_datetime(expires_at)
+  if remaining is None or remaining <= 0:
+    mark_beta_access_otp_expired(otp_record["otp_id"])
+    return None
+  return remaining
+
+
+def list_beta_access_recent_sent_timestamps(email: str, *, window_seconds: int) -> list[str]:
+  cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select sent_at from beta_access_otps where email = ? and sent_at is not null and sent_at >= ? order by sent_at asc",
+      (email, cutoff)
+    ).fetchall()
+  return [row[0] for row in rows if row[0]]
+
+
+def increment_beta_access_otp_attempt(otp_id: str) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set attempt_count = attempt_count + 1 where otp_id = ?",
+      (otp_id,)
+    )
+    conn.commit()
+
+
+def mark_beta_access_otp_expired(otp_id: str) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set status = 'expired' where otp_id = ? and status in ('pending', 'sent')",
+      (otp_id,)
+    )
+    conn.commit()
+
+
+def mark_beta_access_otp_verified(otp_id: str) -> None:
+  verified_at = now_iso()
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_otps set status = 'verified', verified_at = ? where otp_id = ? and status in ('pending', 'sent')",
+      (verified_at, otp_id)
+    )
+    conn.commit()
+
+
+def deliver_email_otp(email: str, code: str, expires_in_seconds: int) -> None:
+  smtp_host = os.getenv("EMAIL_OTP_SMTP_HOST", "").strip()
+  smtp_port = env_int("EMAIL_OTP_SMTP_PORT", 587)
+  smtp_username = os.getenv("EMAIL_OTP_SMTP_USERNAME", "").strip()
+  smtp_password = os.getenv("EMAIL_OTP_SMTP_PASSWORD", "")
+  smtp_from = os.getenv("EMAIL_OTP_FROM", smtp_username).strip()
+  use_ssl = os.getenv("EMAIL_OTP_SMTP_USE_SSL", "false").strip().lower() == "true"
+  use_tls = os.getenv("EMAIL_OTP_SMTP_USE_TLS", "true").strip().lower() != "false"
+  if not smtp_host or not smtp_from:
+    raise RuntimeError("email_delivery_not_configured")
+  message = EmailMessage()
+  message["Subject"] = beta_access_otp_subject()
+  message["From"] = smtp_from
+  message["To"] = email
+  expire_minutes = max(1, (expires_in_seconds + 59) // 60)
+  message.set_content(
+    f"你的 Dice Tales 内测验证码是 {code}。\n\n"
+    f"验证码将在 {expire_minutes} 分钟后失效。"
+  )
+  try:
+    if use_ssl:
+      with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as client:
+        if smtp_username:
+          client.login(smtp_username, smtp_password)
+        client.send_message(message)
+      return
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as client:
+      if use_tls:
+        client.starttls(context=ssl.create_default_context())
+      if smtp_username:
+        client.login(smtp_username, smtp_password)
+      client.send_message(message)
+  except Exception as exc:
+    raise RuntimeError("email_delivery_failed") from exc
+
+
+def issue_beta_access_token(email: str) -> dict[str, str]:
+  token_id = f"token_{uuid4().hex[:12]}"
+  token = f"beta_{secrets.token_urlsafe(32)}"
+  created_at = now_iso()
+  expires_at = future_iso(days=beta_access_token_ttl_days())
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_tokens set status = 'revoked', revoked_at = ? where email = ? and status = 'active'",
+      (created_at, email)
+    )
+    conn.execute(
+      "insert into beta_access_tokens (token_id, email, token_hash, status, created_at, expires_at, last_used_at, revoked_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      (token_id, email, hash_secret(token), "active", created_at, expires_at, created_at, None)
+    )
+    conn.commit()
+  return {"token": token, "expires_at": expires_at}
+
+
+def get_beta_access_token_record(token: str) -> dict[str, Any] | None:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select token_id, email, status, created_at, expires_at, last_used_at, revoked_at from beta_access_tokens where token_hash = ?",
+      (hash_secret(token),)
+    ).fetchone()
+  if not row:
+    return None
+  return {
+    "token_id": row[0],
+    "email": row[1],
+    "status": row[2],
+    "created_at": row[3],
+    "expires_at": row[4],
+    "last_used_at": row[5],
+    "revoked_at": row[6]
+  }
+
+
+def touch_beta_access_token(token_id: str) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_tokens set last_used_at = ? where token_id = ? and status = 'active'",
+      (now_iso(), token_id)
+    )
+    conn.commit()
+
+
+def mark_beta_access_token_expired(token_id: str) -> None:
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "update beta_access_tokens set status = 'expired', revoked_at = ? where token_id = ? and status = 'active'",
+      (now_iso(), token_id)
+    )
+    conn.commit()
+
+
+def extract_bearer_token(authorization: str | None) -> str | None:
+  if not authorization:
+    return None
+  scheme, _, value = authorization.partition(" ")
+  if scheme.lower() != "bearer":
+    return None
+  token = value.strip()
+  return token or None
+
+
+def require_beta_access_token(authorization: str | None) -> dict[str, Any]:
+  token = extract_bearer_token(authorization)
+  if not token or not token.startswith("beta_"):
+    raise HTTPException(status_code=401, detail="未通过内测准入验证")
+  token_record = get_beta_access_token_record(token)
+  if not token_record or token_record["status"] != "active":
+    raise HTTPException(status_code=401, detail="未通过内测准入验证")
+  expires_at = parse_iso_datetime(token_record["expires_at"])
+  if expires_at is None or expires_at <= datetime.now(timezone.utc):
+    mark_beta_access_token_expired(token_record["token_id"])
+    raise HTTPException(status_code=401, detail="内测准入凭证已过期")
+  access_record = get_beta_access_email_record(token_record["email"])
+  if not access_record or not access_record["is_verified"]:
+    raise HTTPException(status_code=401, detail="未通过内测准入验证")
+  touch_beta_access_token(token_record["token_id"])
+  return token_record
+
+
+def get_beta_waitlist_entry(email: str) -> dict[str, Any] | None:
+  with sqlite3.connect(db_path()) as conn:
+    row = conn.execute(
+      "select email, status, source_status, first_requested_at, last_requested_at, created_at, updated_at from beta_waitlist where email = ?",
+      (email,)
+    ).fetchone()
+  if not row:
+    return None
+  return {
+    "email": row[0],
+    "status": row[1],
+    "source_status": row[2],
+    "first_requested_at": row[3],
+    "last_requested_at": row[4],
+    "created_at": row[5],
+    "updated_at": row[6]
+  }
+
+
+def upsert_beta_waitlist_entry(email: str, source_status: str | None) -> bool:
+  existing = get_beta_waitlist_entry(email)
+  created = existing is None
+  requested_at = now_iso()
+  final_source_status = source_status or (existing.get("source_status") if existing else None) or "beta_capacity_full"
+  first_requested_at = existing["first_requested_at"] if existing else requested_at
+  created_at = existing["created_at"] if existing else requested_at
+  with sqlite3.connect(db_path()) as conn:
+    conn.execute(
+      "insert into beta_waitlist (email, status, source_status, first_requested_at, last_requested_at, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?) "
+      "on conflict(email) do update set status=excluded.status, source_status=excluded.source_status, last_requested_at=excluded.last_requested_at, updated_at=excluded.updated_at",
+      (email, "active", final_source_status, first_requested_at, requested_at, created_at, requested_at)
+    )
+    conn.commit()
+  return created
+
+
+def list_beta_access_email_records() -> list[dict[str, Any]]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select email, is_verified, first_verified_at, last_verified_at, last_login_at, last_otp_requested_at, last_otp_sent_at, last_waitlist_at, waitlist_status, created_at, updated_at "
+      "from beta_access_emails "
+      "order by is_verified desc, coalesce(last_login_at, last_verified_at, updated_at) desc, email asc"
+    ).fetchall()
+  return [{
+    "email": row[0],
+    "is_verified": bool(row[1]),
+    "first_verified_at": row[2],
+    "last_verified_at": row[3],
+    "last_login_at": row[4],
+    "last_otp_requested_at": row[5],
+    "last_otp_sent_at": row[6],
+    "last_waitlist_at": row[7],
+    "waitlist_status": row[8],
+    "created_at": row[9],
+    "updated_at": row[10]
+  } for row in rows]
+
+
+def list_beta_waitlist_entries() -> list[dict[str, Any]]:
+  with sqlite3.connect(db_path()) as conn:
+    rows = conn.execute(
+      "select email, status, source_status, first_requested_at, last_requested_at, created_at, updated_at "
+      "from beta_waitlist "
+      "order by case when status = 'active' then 0 else 1 end, last_requested_at desc, email asc"
+    ).fetchall()
+  return [{
+    "email": row[0],
+    "status": row[1],
+    "source_status": row[2],
+    "first_requested_at": row[3],
+    "last_requested_at": row[4],
+    "created_at": row[5],
+    "updated_at": row[6]
+  } for row in rows]
+
+
+def beta_access_rate_limited_response(
+  *,
+  email: str,
+  detail: str,
+  retry_after_seconds: int,
+  active_code_expires_in_seconds: int | None
+) -> JSONResponse:
+  retry_after = max(1, retry_after_seconds)
+  return JSONResponse(
+    status_code=429,
+    headers={"Retry-After": str(retry_after)},
+    content={
+      "detail": detail,
+      "status": "rate_limited",
+      "email": email,
+      "resend_available_in_seconds": retry_after,
+      "expires_in_seconds": active_code_expires_in_seconds,
+      "active_code_available": bool(active_code_expires_in_seconds)
+    }
+  )
 
 
 def extract_pdf_text(path: str) -> str:
@@ -2007,6 +2523,125 @@ async def health():
   return {"status": "ok"}
 
 
+@app.post("/beta-access/send-code")
+async def send_beta_access_code(request: BetaEmailOtpSendRequest):
+  email = normalize_beta_email(request.email)
+  access_record = ensure_beta_access_email_record(email)
+  historical_user = bool(access_record["is_verified"])
+  requested_at = now_iso()
+  access_record["last_otp_requested_at"] = requested_at
+  access_record["updated_at"] = requested_at
+  resend_available_in_seconds = get_beta_access_resend_available_in_seconds(access_record)
+  active_code_expires_in_seconds = get_beta_access_active_otp_remaining_seconds(email)
+  if resend_available_in_seconds > 0:
+    save_beta_access_email_record(access_record)
+    return beta_access_rate_limited_response(
+      email=email,
+      detail=f"验证码已发送，请在 {resend_available_in_seconds} 秒后再试",
+      retry_after_seconds=resend_available_in_seconds,
+      active_code_expires_in_seconds=active_code_expires_in_seconds
+    )
+  send_window_seconds = max(1, beta_access_otp_send_window_seconds())
+  send_window_limit = max(1, beta_access_otp_send_limit_per_window())
+  recent_sent_timestamps = list_beta_access_recent_sent_timestamps(email, window_seconds=send_window_seconds)
+  if len(recent_sent_timestamps) >= send_window_limit:
+    oldest_recent_sent_at = parse_iso_datetime(recent_sent_timestamps[0])
+    retry_after_seconds = seconds_until_datetime(
+      oldest_recent_sent_at + timedelta(seconds=send_window_seconds) if oldest_recent_sent_at else None
+    ) or 1
+    save_beta_access_email_record(access_record)
+    return beta_access_rate_limited_response(
+      email=email,
+      detail=f"发送过于频繁，请在 {retry_after_seconds} 秒后再试",
+      retry_after_seconds=retry_after_seconds,
+      active_code_expires_in_seconds=active_code_expires_in_seconds
+    )
+  if not historical_user and count_verified_beta_access_emails() >= beta_access_email_limit():
+    save_beta_access_email_record(access_record)
+    return BetaEmailOtpSendResult(
+      status="waitlist_required",
+      email=email,
+      historical_user=False,
+      waitlist_open=True,
+      expires_in_seconds=None,
+      resend_available_in_seconds=None
+    ).model_dump()
+  code = f"{random.randint(0, 999999):06d}"
+  otp_record = create_beta_access_otp(email, code)
+  try:
+    deliver_email_otp(email, code, beta_access_otp_ttl_seconds())
+  except RuntimeError:
+    mark_beta_access_otp_failed(otp_record["otp_id"], "delivery_failed")
+    raise HTTPException(status_code=503, detail="验证码发送失败，请稍后重试")
+  sent_at = now_iso()
+  access_record["last_otp_sent_at"] = sent_at
+  access_record["updated_at"] = sent_at
+  save_beta_access_email_record(access_record)
+  mark_beta_access_otp_sent(otp_record["otp_id"])
+  return BetaEmailOtpSendResult(
+    status="otp_sent",
+    email=email,
+    historical_user=historical_user,
+    waitlist_open=False,
+    expires_in_seconds=beta_access_otp_ttl_seconds(),
+    resend_available_in_seconds=beta_access_otp_resend_cooldown_seconds()
+  ).model_dump()
+
+
+@app.post("/beta-access/verify-code")
+async def verify_beta_access_code(request: BetaEmailOtpVerifyRequest):
+  email = normalize_beta_email(request.email)
+  code = request.code.strip()
+  if not re.fullmatch(r"\d{6}", code):
+    raise HTTPException(status_code=400, detail="验证码格式无效")
+  otp_record = get_latest_active_beta_access_otp(email)
+  if not otp_record:
+    raise HTTPException(status_code=400, detail="验证码不存在或已失效")
+  expires_at = parse_iso_datetime(otp_record["expires_at"])
+  if expires_at is None or expires_at <= datetime.now(timezone.utc):
+    mark_beta_access_otp_expired(otp_record["otp_id"])
+    raise HTTPException(status_code=400, detail="验证码已过期")
+  if not hmac.compare_digest(otp_record["code_hash"], hash_secret(code)):
+    increment_beta_access_otp_attempt(otp_record["otp_id"])
+    raise HTTPException(status_code=400, detail="验证码错误")
+  mark_beta_access_otp_verified(otp_record["otp_id"])
+  verified_at = now_iso()
+  access_record = ensure_beta_access_email_record(email)
+  access_record["is_verified"] = True
+  access_record["first_verified_at"] = access_record["first_verified_at"] or verified_at
+  access_record["last_verified_at"] = verified_at
+  access_record["last_login_at"] = verified_at
+  access_record["updated_at"] = verified_at
+  save_beta_access_email_record(access_record)
+  credential = issue_beta_access_token(email)
+  return BetaEmailOtpVerifyResult(
+    email=email,
+    credential=BetaAccessCredential(token=credential["token"], expires_at=credential["expires_at"])
+  ).model_dump()
+
+
+@app.post("/beta-access/waitlist")
+async def register_beta_access_waitlist(request: BetaWaitlistRequest):
+  email = normalize_beta_email(request.email)
+  created = upsert_beta_waitlist_entry(email, request.source_status)
+  updated_at = now_iso()
+  access_record = ensure_beta_access_email_record(email)
+  access_record["last_waitlist_at"] = updated_at
+  access_record["waitlist_status"] = "active"
+  access_record["updated_at"] = updated_at
+  save_beta_access_email_record(access_record)
+  return BetaWaitlistResult(email=email, created=created).model_dump()
+
+
+@app.get("/beta-access/session")
+async def get_beta_access_session(authorization: str | None = Header(default=None)):
+  token_record = require_beta_access_token(authorization)
+  return BetaAccessSessionResult(
+    email=token_record["email"],
+    expires_at=token_record["expires_at"]
+  ).model_dump()
+
+
 def require_admin_token(x_admin_token: str | None = Header(default=None)):
   expected = os.getenv("ADMIN_API_TOKEN", "")
   if expected and x_admin_token != expected:
@@ -2167,6 +2802,28 @@ async def admin_users(x_admin_token: str | None = Header(default=None)):
   } for item in aggregate.values()]
   users.sort(key=lambda item: item["last_active_at"], reverse=True)
   return admin_response(users, {"total": len(users)})
+
+
+@app.get("/admin/beta-access")
+async def admin_beta_access(x_admin_token: str | None = Header(default=None)):
+  require_admin_token(x_admin_token)
+  email_records = list_beta_access_email_records()
+  verified_emails = [item for item in email_records if item["is_verified"]]
+  waitlist_entries = list_beta_waitlist_entries()
+  recent_verified_at = next((item["last_verified_at"] for item in verified_emails if item["last_verified_at"]), None)
+  recent_waitlist_at = next((item["last_requested_at"] for item in waitlist_entries if item["last_requested_at"]), None)
+  return admin_response({
+    "summary": {
+      "verified_total": len(verified_emails),
+      "waitlist_total": len(waitlist_entries),
+      "active_waitlist_total": len([item for item in waitlist_entries if item["status"] == "active"]),
+      "verified_limit": beta_access_email_limit(),
+      "recent_verified_at": recent_verified_at,
+      "recent_waitlist_at": recent_waitlist_at
+    },
+    "verified_emails": verified_emails,
+    "waitlist": waitlist_entries
+  })
 
 
 @app.get("/admin/sessions")
@@ -2615,7 +3272,7 @@ async def create_character(payload: CharacterCreate):
     "skills": payload.skills,
     "inventory": inventory,
     "status": status_payload,
-    "created_at": datetime.utcnow().isoformat(),
+    "created_at": now_iso(),
     "tags": [],
     "extra": {},
   }
@@ -2748,8 +3405,8 @@ async def create_session(payload: SessionCreate):
     "rule_system": "coc",
     "scenario_id": payload.scenario_id,
     "investigator_id": payload.investigator_id,
-    "started_at": datetime.utcnow().isoformat(),
-    "updated_at": datetime.utcnow().isoformat(),
+    "started_at": now_iso(),
+    "updated_at": now_iso(),
     "user_id": payload.user_id,
     "state": {
       "current_scene_id": initial_scene.id if initial_scene else None,

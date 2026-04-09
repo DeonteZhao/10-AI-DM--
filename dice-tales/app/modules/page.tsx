@@ -3,11 +3,13 @@
 import { useEffect, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Plus } from "@phosphor-icons/react";
+import { useBetaAccess } from "@/components/BetaAccessGate";
 import { ModuleImagePlaceholder } from "@/components/ModuleImagePlaceholder";
 import type { CocInvestigatorRecord, CocModuleSummary } from "@/lib/domain/coc";
 
 function ModulesContent() {
   const router = useRouter();
+  const { isReady } = useBetaAccess();
   const [modules, setModules] = useState<CocModuleSummary[]>([]);
   const [characters, setCharacters] = useState<CocInvestigatorRecord[]>([]);
   const [selectedModule, setSelectedModule] = useState<CocModuleSummary | null>(null);
@@ -15,6 +17,10 @@ function ModulesContent() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isReady) {
+      return;
+    }
+
     let disposed = false;
 
     const loadData = async () => {
@@ -60,7 +66,7 @@ function ModulesContent() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [isReady]);
 
   const handleOpenModule = (module: CocModuleSummary) => {
     if (characters.length > 0) {

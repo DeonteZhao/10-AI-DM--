@@ -114,6 +114,7 @@ export interface CocCharacterStatus {
 
 export interface CocItem extends CocExtensibleEntity {
   id: string;
+  item_ref_id?: string | null;
   name: string;
   description: string;
   category: CocInventoryCategory;

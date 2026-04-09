@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  BETA_ACCESS_STATE_HEADER,
+  BETA_ACCESS_TOKEN_COOKIE_NAME,
+  isProtectedPlayerPath,
+} from "@/lib/beta-access";
 
 function unauthorizedResponse() {
   return new NextResponse("Unauthorized", {
@@ -26,12 +31,21 @@ function checkBasicAuth(request: NextRequest): boolean {
 }
 
 export function middleware(request: NextRequest) {
-  if (!checkBasicAuth(request)) {
+  if (request.nextUrl.pathname.startsWith("/admin") && !checkBasicAuth(request)) {
     return unauthorizedResponse();
   }
-  return NextResponse.next();
+  const requestHeaders = new Headers(request.headers);
+  if (isProtectedPlayerPath(request.nextUrl.pathname)) {
+    const hasBetaAccessCookie = Boolean(request.cookies.get(BETA_ACCESS_TOKEN_COOKIE_NAME)?.value);
+    requestHeaders.set(BETA_ACCESS_STATE_HEADER, hasBetaAccessCookie ? "verified" : "unverified");
+  }
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
 }
 
 export const config = {
-  matcher: ["/admin/:path*"]
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"]
 };

@@ -5,6 +5,7 @@ import AdminTokenBar from "./AdminTokenBar";
 const navItems = [
   { href: "/admin", label: "总览" },
   { href: "/admin/users", label: "用户" },
+  { href: "/admin/beta-access", label: "内测准入" },
   { href: "/admin/sessions", label: "会话" },
   { href: "/admin/modules", label: "模组编辑" },
   { href: "/admin/upload", label: "导入模组" }

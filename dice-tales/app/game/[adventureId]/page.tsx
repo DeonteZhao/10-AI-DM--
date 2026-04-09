@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { Brain, CircleNotch, DiceFive, MapPin, PaperPlaneRight, X } from "@phosphor-icons/react";
+import { useBetaAccess } from "@/components/BetaAccessGate";
 import { CharacterPanel } from "@/components/CharacterPanel";
 import {
   COC_BASELINE_MODULE_ID,
@@ -380,6 +381,7 @@ function MapPanel({
 function GameContent() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const { isReady } = useBetaAccess();
   const adventureId = params.adventureId as string;
   const requestedModuleId = searchParams.get("module");
   const characterId = searchParams.get("character");
@@ -499,6 +501,10 @@ function GameContent() {
   }, []);
 
   useEffect(() => {
+    if (!isReady) {
+      return;
+    }
+
     let disposed = false;
 
     const initialize = async () => {
@@ -583,7 +589,7 @@ function GameContent() {
     return () => {
       disposed = true;
     };
-  }, [adventureId, characterId, requestedModuleId]);
+  }, [adventureId, characterId, isReady, requestedModuleId]);
 
   const handleSend = async (text: string, checkResult?: CocCheckResult) => {
     if (!sessionId || !text.trim() || (processing && !checkResult)) {

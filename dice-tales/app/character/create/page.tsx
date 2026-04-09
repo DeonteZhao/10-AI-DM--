@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, CaretLeft, CaretRight, DiceFive } from "@phosphor-icons/react";
+import { useBetaAccess } from "@/components/BetaAccessGate";
 import {
   COC_BASELINE_MODULE_ID,
   COC_BASELINE_MODULE_NAME,
@@ -107,6 +108,7 @@ function getSkillBaseValue(skill: string, characteristics: CocCharacteristics) {
 function CharacterCreateContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isReady } = useBetaAccess();
   const requestedModuleId = searchParams.get("module");
   const [moduleSummary, setModuleSummary] = useState<CocModuleSummary | null>(null);
   const [activeModuleId, setActiveModuleId] = useState(requestedModuleId || COC_BASELINE_MODULE_ID);
@@ -123,6 +125,10 @@ function CharacterCreateContent() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    if (!isReady) {
+      return;
+    }
+
     let disposed = false;
 
     const loadModule = async (moduleId: string, fallbackUsed: boolean) => {
@@ -158,7 +164,7 @@ function CharacterCreateContent() {
     return () => {
       disposed = true;
     };
-  }, [requestedModuleId]);
+  }, [isReady, requestedModuleId]);
 
   const occupationDetail = OCCUPATION_DETAILS[occupation];
   const occPointsTotal = useMemo(() => {

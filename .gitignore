@@ -1,0 +1,10 @@
+node_modules/
+.next/
+dice-tales/.next/
+*.tsbuildinfo
+backend/__pycache__/
+backend/domain/**/__pycache__/
+*.pyc
+backend/storage/modules.db
+.env.local
+.env.production

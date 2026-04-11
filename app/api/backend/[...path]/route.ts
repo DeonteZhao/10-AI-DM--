@@ -3,6 +3,7 @@ import {
   BETA_ACCESS_TOKEN_COOKIE_NAME,
   isAdminApiPath,
   isBetaAccessApiPath,
+  isLocalBetaAccessBypassed,
 } from "@/lib/beta-access";
 
 const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || "http://127.0.0.1:8000";
@@ -73,12 +74,25 @@ async function buildProxyResponse(upstream: Response) {
   });
 }
 
+async function parseUpstreamJson(upstream: Response) {
+  const text = await upstream.text();
+  if (!text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 async function proxy(request: NextRequest, path: string[]) {
   const isPublicBetaAccessRequest = isBetaAccessApiPath(path);
   const isAdminRequest = isAdminApiPath(path);
   const betaAccessToken = getRequestBetaAccessToken(request);
+  const localBypass = isLocalBetaAccessBypassed();
 
-  if (!isPublicBetaAccessRequest && !isAdminRequest) {
+  if (!localBypass && !isPublicBetaAccessRequest && !isAdminRequest) {
     if (!betaAccessToken || !(await validateBetaAccessToken(betaAccessToken))) {
       return unauthorizedResponse();
     }
@@ -97,10 +111,10 @@ async function proxy(request: NextRequest, path: string[]) {
   if (geoCountry) {
     headers.set("x-geo-country", geoCountry);
   }
-  if (!isPublicBetaAccessRequest && !isAdminRequest && betaAccessToken) {
+  if (!localBypass && !isPublicBetaAccessRequest && !isAdminRequest && betaAccessToken) {
     headers.set("authorization", `Bearer ${betaAccessToken}`);
   }
-  if (isPublicBetaAccessRequest && path[1] === "session" && betaAccessToken) {
+  if (!localBypass && isPublicBetaAccessRequest && path[1] === "session" && betaAccessToken) {
     headers.set("authorization", `Bearer ${betaAccessToken}`);
   }
   const init: RequestInit = {
@@ -116,25 +130,42 @@ async function proxy(request: NextRequest, path: string[]) {
   const upstream = await fetch(targetUrl, init);
 
   if (isPublicBetaAccessRequest && ["verify-code", "session"].includes(path[1] || "")) {
-    const payload = await upstream.json();
+    const payload = await parseUpstreamJson(upstream);
+    if (!payload) {
+      const response = NextResponse.json(
+        { detail: "准入服务暂时不可用，请确认本地后端是否已启动" },
+        { status: upstream.ok ? 502 : upstream.status },
+      );
+      if (path[1] === "session") {
+        response.cookies.delete(BETA_ACCESS_TOKEN_COOKIE_NAME);
+      }
+      return response;
+    }
+    const payloadRecord = payload as {
+      expires_at?: unknown;
+      credential?: {
+        token?: unknown;
+        expires_at?: unknown;
+      };
+    };
     const response = NextResponse.json(payload, {
       status: upstream.status,
     });
     if (
       upstream.ok
-      && typeof payload?.expires_at === "string"
+      && typeof payloadRecord.expires_at === "string"
       && path[1] === "session"
       && betaAccessToken
     ) {
-      setBetaAccessCookie(response, betaAccessToken, payload.expires_at);
+      setBetaAccessCookie(response, betaAccessToken, payloadRecord.expires_at);
     }
     if (
       upstream.ok
-      && typeof payload?.credential?.token === "string"
-      && typeof payload?.credential?.expires_at === "string"
+      && typeof payloadRecord.credential?.token === "string"
+      && typeof payloadRecord.credential?.expires_at === "string"
       && path[1] === "verify-code"
     ) {
-      setBetaAccessCookie(response, payload.credential.token, payload.credential.expires_at);
+      setBetaAccessCookie(response, payloadRecord.credential.token, payloadRecord.credential.expires_at);
     }
     if (!upstream.ok && path[1] === "session") {
       response.cookies.delete(BETA_ACCESS_TOKEN_COOKIE_NAME);

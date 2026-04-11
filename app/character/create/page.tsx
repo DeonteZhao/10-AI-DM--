@@ -13,6 +13,8 @@ import {
   type CocCharacteristics,
   type CocInvestigatorCreatePayload,
   type CocModuleSummary,
+  getCocOccupationPointTotal,
+  getCocPersonalPointTotal,
   getCocSkillBaseValue,
   normalizeCocSkillMap,
 } from "@/lib/domain/coc";
@@ -27,6 +29,7 @@ const STEP_LABELS: Record<Step, string> = {
 };
 
 const STEP_ORDER: Step[] = ["basic", "stats", "skills", "confirm"];
+const SKILL_POINT_STEP = 5;
 
 const rollDie = (sides: number) => Math.floor(Math.random() * sides) + 1;
 const roll3d6 = () => (rollDie(6) + rollDie(6) + rollDie(6)) * 5;
@@ -46,6 +49,120 @@ const createRolledCharacteristics = (): CocCharacteristics => {
   };
   return next;
 };
+
+const PRESET_INVESTIGATORS = [
+  {
+    id: "reporter",
+    title: "街头记者",
+    subtitle: "偏调查与社交，适合快速进入线索搜集。",
+    profile: {
+      name: "林秋声",
+      occupation: "记者",
+      age: 27,
+      avatar: "📰",
+      backstory: "擅长追踪流言与采访取证，面对异常事件时总会先查到第一手线索。",
+    },
+    characteristics: {
+      str: 45,
+      con: 55,
+      siz: 60,
+      dex: 55,
+      app: 65,
+      int: 60,
+      pow: 55,
+      edu: 60,
+      luck: 50,
+    },
+    allocations: {
+      "艺术/手艺": { occ: 15, per: 0 },
+      历史: { occ: 20, per: 0 },
+      图书馆利用: { occ: 30, per: 10 },
+      母语: { occ: 20, per: 0 },
+      心理学: { occ: 35, per: 0 },
+      侦查: { occ: 0, per: 20 },
+      聆听: { occ: 0, per: 15 },
+      话术: { occ: 0, per: 10 },
+      说服: { occ: 0, per: 10 },
+      急救: { occ: 0, per: 5 },
+    },
+  },
+  {
+    id: "police",
+    title: "老练警探",
+    subtitle: "偏行动与盘查，适合先手推进局面。",
+    profile: {
+      name: "周砺行",
+      occupation: "警察",
+      age: 32,
+      avatar: "🚓",
+      backstory: "常年奔走在案发现场与街头线人之间，对异常痕迹和危险气味格外敏锐。",
+    },
+    characteristics: {
+      str: 60,
+      con: 60,
+      siz: 65,
+      dex: 70,
+      app: 50,
+      int: 55,
+      pow: 60,
+      edu: 60,
+      luck: 45,
+    },
+    allocations: {
+      斗殴: { occ: 20, per: 0 },
+      射击: { occ: 25, per: 0 },
+      急救: { occ: 15, per: 0 },
+      法律: { occ: 20, per: 0 },
+      心理学: { occ: 20, per: 0 },
+      侦查: { occ: 30, per: 0 },
+      聆听: { occ: 0, per: 15 },
+      图书馆利用: { occ: 0, per: 10 },
+      话术: { occ: 0, per: 10 },
+      潜行: { occ: 0, per: 10 },
+      恐吓: { occ: 0, per: 10 },
+    },
+  },
+] as const;
+
+function buildRandomSkillAllocations(
+  characteristics: CocCharacteristics,
+  occupationDetail: (typeof COC_OCCUPATION_DETAILS)[keyof typeof COC_OCCUPATION_DETAILS],
+  occPointsTotal: number,
+  personalPointsTotal: number,
+) {
+  const next: Record<string, { occ: number; per: number }> = {};
+  const allSkills = Object.keys(COC_BASE_SKILLS);
+
+  const allocate = (skills: string[], total: number, target: "occ" | "per") => {
+    let remaining = total;
+    let guard = 0;
+    while (remaining > 0 && guard < 10000) {
+      const available = skills.filter((skill) => {
+        const current = next[skill] || { occ: 0, per: 0 };
+        const totalValue = getCocSkillBaseValue(skill, characteristics) + current.occ + current.per;
+        return totalValue + SKILL_POINT_STEP <= 99;
+      });
+      if (available.length === 0) {
+        throw new Error("当前点数无法完成随机分配");
+      }
+      const selectedSkill = available[Math.floor(Math.random() * available.length)];
+      const current = next[selectedSkill] || { occ: 0, per: 0 };
+      next[selectedSkill] = {
+        ...current,
+        [target]: current[target] + SKILL_POINT_STEP,
+      };
+      remaining -= SKILL_POINT_STEP;
+      guard += 1;
+    }
+  };
+
+  allocate(occupationDetail.skills, occPointsTotal, "occ");
+  allocate(allSkills, personalPointsTotal, "per");
+
+  return Object.fromEntries(
+    Object.entries(next).filter(([, value]) => value.occ > 0 || value.per > 0),
+  );
+}
 
 function CharacterCreateContent() {
   const router = useRouter();
@@ -130,17 +247,14 @@ function CharacterCreateContent() {
       return changed ? next : prev;
     });
   }, [occupationDetail.skills]);
-  const occPointsTotal = useMemo(() => {
-    if (!characteristics.edu) {
-      return 0;
-    }
-    if (occupationDetail.pointFormula === "EDU*2+(STR|DEX)*2") {
-      return characteristics.edu * 2 + Math.max(characteristics.str || 0, characteristics.dex || 0) * 2;
-    }
-    return characteristics.edu * 4;
-  }, [characteristics.dex, characteristics.edu, characteristics.str, occupationDetail.pointFormula]);
-
-  const personalPointsTotal = (characteristics.int || 0) * 2;
+  const occPointsTotal = useMemo(
+    () => getCocOccupationPointTotal(characteristics, occupationDetail),
+    [characteristics, occupationDetail],
+  );
+  const personalPointsTotal = useMemo(
+    () => getCocPersonalPointTotal(characteristics),
+    [characteristics],
+  );
   const occPointsSpent = Object.values(allocations).reduce((sum, item) => sum + item.occ, 0);
   const personalPointsSpent = Object.values(allocations).reduce((sum, item) => sum + item.per, 0);
   const currentStepIndex = STEP_ORDER.indexOf(step);
@@ -149,6 +263,32 @@ function CharacterCreateContent() {
     setCharacteristics(createRolledCharacteristics());
     setAllocations({});
     setSubmitError(null);
+  };
+
+  const applyPresetInvestigator = (preset: (typeof PRESET_INVESTIGATORS)[number]) => {
+    setName(preset.profile.name);
+    setOccupation(preset.profile.occupation);
+    setAge(preset.profile.age);
+    setCharacteristics(preset.characteristics);
+    setAllocations(preset.allocations);
+    setSubmitError(null);
+    setStep("confirm");
+  };
+
+  const handleRandomizeSkills = () => {
+    try {
+      setAllocations(
+        buildRandomSkillAllocations(
+          characteristics,
+          occupationDetail,
+          occPointsTotal,
+          personalPointsTotal,
+        ),
+      );
+      setSubmitError(null);
+    } catch (error) {
+      setSubmitError((error as Error).message || "随机分配失败");
+    }
   };
 
   const adjustSkill = (skill: string, target: "occ" | "per", delta: number) => {
@@ -316,6 +456,33 @@ function CharacterCreateContent() {
         {step === "basic" && (
           <div className="space-y-8 max-w-xl mx-auto">
             <h2 className="text-4xl font-black mb-8 text-center uppercase tracking-widest riso-title">基本信息</h2>
+            <div className="space-y-4">
+              <div className="text-sm font-black uppercase tracking-[0.3em] opacity-70">快速预设</div>
+              <div className="grid gap-4">
+                {PRESET_INVESTIGATORS.map((preset) => (
+                  <div key={preset.id} className="bg-theme-bg border-[3px] border-[var(--ink-color)] p-5 shadow-[4px_4px_0_var(--ink-color)]">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-2xl font-black tracking-widest">{preset.profile.avatar} {preset.title}</div>
+                        <div className="mt-2 text-sm font-bold tracking-widest opacity-70">
+                          {preset.profile.occupation} · {preset.profile.age} 岁
+                        </div>
+                        <div className="mt-3 text-sm font-bold leading-6 opacity-80">
+                          {preset.subtitle}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => applyPresetInvestigator(preset)}
+                        className="shrink-0 bg-[var(--ink-color)] text-[var(--bg-color)] border-[3px] border-[var(--ink-color)] px-4 py-2 font-black uppercase tracking-widest hover:-translate-y-1 hover:shadow-[4px_4px_0_var(--ink-color)] active:translate-y-0 active:shadow-none transition-all"
+                      >
+                        直接使用
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="space-y-6">
               <div>
                 <label className="block text-[var(--ink-color)] font-black mb-3 text-xl uppercase tracking-widest">调查员姓名</label>
@@ -402,13 +569,25 @@ function CharacterCreateContent() {
         {step === "skills" && (
           <div className="space-y-8">
             <div className="border-b-[3px] border-[var(--ink-color)] pb-4">
-              <h2 className="text-4xl font-black uppercase tracking-widest riso-title">技能分配</h2>
-              <p className="mt-4 font-bold tracking-widest">
-                本职点数 {occPointsSpent} / {occPointsTotal} · 兴趣点数 {personalPointsSpent} / {personalPointsTotal}
-              </p>
-              <p className="mt-2 font-bold tracking-widest opacity-70">
-                本职技能：{occupationDetail.skills.join("、")}
-              </p>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-4xl font-black uppercase tracking-widest riso-title">技能分配</h2>
+                  <p className="mt-4 font-bold tracking-widest">
+                    本职点数 {occPointsSpent} / {occPointsTotal} · 兴趣点数 {personalPointsSpent} / {personalPointsTotal}
+                  </p>
+                  <p className="mt-2 font-bold tracking-widest opacity-70">
+                    本职技能：{occupationDetail.skills.join("、")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRandomizeSkills}
+                  className="flex items-center gap-3 bg-[var(--ink-color)] text-[var(--bg-color)] border-[3px] border-[var(--ink-color)] px-6 py-3 font-black uppercase tracking-widest hover:-translate-y-1 hover:shadow-[6px_6px_0_var(--ink-color)] active:translate-y-0 active:shadow-none transition-all whitespace-nowrap"
+                >
+                  <DiceFive className="w-6 h-6" weight="fill" />
+                  一键随机
+                </button>
+              </div>
             </div>
             <div className="grid gap-4">
               {Object.keys(COC_BASE_SKILLS).map((skill) => {
@@ -427,14 +606,14 @@ function CharacterCreateContent() {
                       </div>
                       <div className="flex items-center gap-6">
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => adjustSkill(skill, "occ", -5)} disabled={!isOccupationSkill && allocation.occ === 0} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">-</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "occ", -SKILL_POINT_STEP)} disabled={!isOccupationSkill && allocation.occ === 0} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">-</button>
                           <span className="min-w-16 text-center font-black tracking-widest">本职 {allocation.occ}</span>
-                          <button type="button" onClick={() => adjustSkill(skill, "occ", 5)} disabled={!isOccupationSkill} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">+</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "occ", SKILL_POINT_STEP)} disabled={!isOccupationSkill} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl disabled:opacity-40">+</button>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => adjustSkill(skill, "per", -5)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">-</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "per", -SKILL_POINT_STEP)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">-</button>
                           <span className="min-w-16 text-center font-black tracking-widest">兴趣 {allocation.per}</span>
-                          <button type="button" onClick={() => adjustSkill(skill, "per", 5)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">+</button>
+                          <button type="button" onClick={() => adjustSkill(skill, "per", SKILL_POINT_STEP)} className="w-10 h-10 border-[3px] border-[var(--ink-color)] bg-[var(--paper-light)] font-black text-xl">+</button>
                         </div>
                       </div>
                     </div>

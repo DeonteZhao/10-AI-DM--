@@ -80,6 +80,7 @@ function ModulesContent() {
   const errorBody = error?.includes("未通过内测准入验证")
     ? "当前会话还没有通过内测准入校验，因此机密案件档案仍处于封存状态。请先完成验证，再重新打开这份档案柜。"
     : error || "系统暂时无法读取案件数据，请稍后重试或返回大厅重新进入。";
+  const hasModules = modules.length > 0;
 
   return (
     <div className="max-w-6xl mx-auto px-10 py-12 relative z-10 font-huiwen">
@@ -160,7 +161,40 @@ function ModulesContent() {
         </div>
       )}
 
-      {!loading && !error && (
+      {!loading && !error && !hasModules && (
+        <div className="riso-panel riso-corners relative overflow-hidden p-8">
+          <div className="text-[10px] font-vt323 uppercase tracking-[0.35em] opacity-70">Archive Notice</div>
+          <h2 className="mt-2 text-3xl font-black uppercase tracking-[0.12em] text-[var(--accent-color)]">案件档案暂未上架</h2>
+          <p className="mt-5 border-t border-dashed border-[var(--ink-color)] pt-5 text-base leading-8 text-[var(--ink-color)] opacity-85">
+            当前没有读取到可展示的 COC 模组。你可以重新读取档案，或先前往调查员名录确认当前环境是否已完成初始化。
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3 border-t border-dashed border-[var(--ink-color)] pt-5">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="border border-[var(--ink-color)] bg-transparent px-4 py-2 font-vt323 text-base uppercase tracking-[0.18em] transition hover:-translate-y-0.5 hover:bg-[var(--ink-color)] hover:text-[var(--paper-light)]"
+            >
+              重新读取
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/coc/characters")}
+              className="border border-[var(--ink-color)] bg-transparent px-4 py-2 font-vt323 text-base uppercase tracking-[0.18em] transition hover:-translate-y-0.5 hover:bg-[var(--ink-color)] hover:text-[var(--paper-light)]"
+            >
+              调查员名录
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="border border-[var(--ink-color)] bg-transparent px-4 py-2 font-vt323 text-base uppercase tracking-[0.18em] transition hover:-translate-y-0.5 hover:bg-[var(--ink-color)] hover:text-[var(--paper-light)]"
+            >
+              返回大厅
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && hasModules && (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
           {modules.map((module) => (
             <button

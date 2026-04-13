@@ -68,6 +68,18 @@ type VisibleLocation = {
   name: string;
 };
 
+class ApiError extends Error {
+  status?: number;
+  code?: string;
+
+  constructor(message: string, options?: { status?: number; code?: string }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options?.status;
+    this.code = options?.code;
+  }
+}
+
 const CHECK_LEVEL_LABELS: Record<CocCheckResult["level"], string> = {
   critical: "大成功",
   extreme: "极难成功",
@@ -76,6 +88,101 @@ const CHECK_LEVEL_LABELS: Record<CocCheckResult["level"], string> = {
   failure: "失败",
   fumble: "大失败",
 };
+
+async function readApiError(response: Response, fallbackMessage: string) {
+  const text = await response.text();
+  let message = text.trim() || fallbackMessage;
+  let code: string | undefined;
+  try {
+    const parsed = JSON.parse(text) as {
+      detail?: unknown;
+      message?: unknown;
+      code?: unknown;
+    };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      message = parsed.detail;
+    } else if (
+      parsed.detail
+      && typeof parsed.detail === "object"
+      && "message" in parsed.detail
+      && typeof parsed.detail.message === "string"
+      && parsed.detail.message.trim()
+    ) {
+      message = parsed.detail.message;
+    } else if (typeof parsed.message === "string" && parsed.message.trim()) {
+      message = parsed.message;
+    }
+    if (typeof parsed.code === "string" && parsed.code.trim()) {
+      code = parsed.code;
+    }
+  } catch {
+  }
+  return new ApiError(message, { status: response.status, code });
+}
+
+async function ensureApiOk(response: Response, fallbackMessage: string) {
+  if (response.ok) {
+    return;
+  }
+  throw await readApiError(response, fallbackMessage);
+}
+
+function getFriendlyErrorMessage(error: unknown, fallbackMessage: string) {
+  const message = error instanceof Error && error.message.trim() ? error.message : fallbackMessage;
+  const status = error instanceof ApiError ? error.status : undefined;
+  const code = error instanceof ApiError ? error.code : undefined;
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    code === "BETA_ACCESS_REQUIRED"
+    || status === 401
+    || message.includes("未通过内测准入验证")
+    || lowerMessage.includes("unauthorized")
+  ) {
+    return "当前准入状态已失效，请刷新页面并重新完成验证后再继续。";
+  }
+
+  if (code === "SESSION_NOT_FOUND" || message.includes("Session not found")) {
+    return "当前调查会话不存在或已失效，请返回案件列表重新进入。";
+  }
+
+  if (
+    code === "INVESTIGATOR_NOT_FOUND"
+    || message.includes("Investigator not found")
+    || message.includes("Character not found")
+  ) {
+    return "当前调查员档案不存在或无权访问，请返回名录重新选择。";
+  }
+
+  if (code === "MODULE_NOT_FOUND" || message.includes("Scenario not found")) {
+    return "当前案件档案不存在或尚未开放，请返回案件列表重新选择。";
+  }
+
+  if (
+    code === "UPSTREAM_UNREACHABLE"
+    || lowerMessage.includes("failed to fetch")
+    || lowerMessage.includes("fetch failed")
+    || message.includes("暂时不可达")
+  ) {
+    return "后端服务暂时不可达，请稍后重试；若持续出现，请确认后端服务已启动。";
+  }
+
+  if (
+    status === 500
+    || (typeof status === "number" && status > 500)
+    || code === "UPSTREAM_ERROR"
+    || code === "GM_ACTION_FAILED"
+    || lowerMessage.includes("internal server error")
+  ) {
+    return "KP 当前暂时无法回应，请稍后重试；若持续出现，请联系管理员检查服务日志。";
+  }
+
+  if (status === 404 || code === "RESOURCE_NOT_FOUND") {
+    return "你访问的调查资源不存在，可能已失效或无权访问。";
+  }
+
+  return message || fallbackMessage;
+}
 
 function getScenarioReference(scenario: PlayerScenarioView) {
   const fileCode = scenario.module_id ? scenario.module_id.slice(0, 8).toUpperCase() : "UNKNOWN";
@@ -96,6 +203,50 @@ function sanitizeScenarioBackground(value: string) {
     return value.split(marker)[1]?.trim() || "";
   }
   return value.trim();
+}
+
+function buildDmMessage(result: Record<string, unknown>) {
+  return {
+    id: `dm_${Date.now()}`,
+    sender: "dm" as const,
+    content: typeof result.narration === "string" ? result.narration : "KP 暂时沉默了下来。",
+    type: "narrative" as const,
+    requiredCheck: result.required_check as CocCheckRequest | undefined,
+    choices: Array.isArray(result.choices)
+      ? result.choices.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+      : [],
+  };
+}
+
+function buildRewardMessages(result: Record<string, unknown>) {
+  const rewards: UiMessage[] = [];
+  if (Array.isArray(result.revealed_clues)) {
+    result.revealed_clues.forEach((clue) => {
+      if (!clue || typeof clue !== "object" || !("id" in clue) || !("title" in clue)) {
+        return;
+      }
+      rewards.push({
+        id: `clue_${String(clue.id)}_${Date.now()}`,
+        sender: "dm",
+        content: `你获得线索【${String(clue.title)}】`,
+        type: "system",
+      });
+    });
+  }
+  if (Array.isArray(result.granted_handouts)) {
+    result.granted_handouts.forEach((handout) => {
+      if (!handout || typeof handout !== "object" || !("id" in handout) || !("title" in handout)) {
+        return;
+      }
+      rewards.push({
+        id: `handout_${String(handout.id)}_${Date.now()}`,
+        sender: "dm",
+        content: `你获得资料【${String(handout.title)}】`,
+        type: "system",
+      });
+    });
+  }
+  return rewards;
 }
 
 function getTextOffset(container: HTMLElement, node: Node, offset: number) {
@@ -657,9 +808,7 @@ function GameContent() {
 
   const syncSessionState = async (nextSessionId: string, preserveMessages = false) => {
     const res = await fetch(`/api/backend/sessions/${nextSessionId}/state`);
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
+    await ensureApiOk(res, "读取调查状态失败");
     const json = await res.json();
     const nextScenario = (json.scenario as PlayerScenarioView) || null;
     if (!preserveMessages && Array.isArray(json.messages)) {
@@ -697,9 +846,7 @@ function GameContent() {
 
   const refreshInvestigator = async (nextSessionId: string) => {
     const res = await fetch(`/api/backend/sessions/${nextSessionId}`);
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
+    await ensureApiOk(res, "读取调查员档案失败");
     const json = await res.json();
     setCharacter((json.investigator as CocInvestigatorRecord) || null);
   };
@@ -765,9 +912,7 @@ function GameContent() {
       try {
         if (adventureId !== "new") {
           const sessionRes = await fetch(`/api/backend/sessions/${adventureId}`);
-          if (!sessionRes.ok) {
-            throw new Error(await sessionRes.text());
-          }
+          await ensureApiOk(sessionRes, "读取调查会话失败");
           const sessionJson = await sessionRes.json();
           if (disposed) {
             return;
@@ -787,12 +932,8 @@ function GameContent() {
           fetch("/api/backend/characters"),
           fetch(`/api/backend/modules/${targetModuleId}/structured`),
         ]);
-        if (!charactersRes.ok) {
-          throw new Error(await charactersRes.text());
-        }
-        if (!scenarioRes.ok) {
-          throw new Error(await scenarioRes.text());
-        }
+        await ensureApiOk(charactersRes, "读取调查员列表失败");
+        await ensureApiOk(scenarioRes, "读取案件档案失败");
         const charactersJson = await charactersRes.json();
         const scenarioJson = await scenarioRes.json();
         const nextCharacter = Array.isArray(charactersJson.characters)
@@ -815,9 +956,7 @@ function GameContent() {
             investigator_id: characterId,
           }),
         });
-        if (!createSessionRes.ok) {
-          throw new Error(await createSessionRes.text());
-        }
+        await ensureApiOk(createSessionRes, "创建调查会话失败");
         const createSessionJson = await createSessionRes.json();
         const nextSessionId = createSessionJson.session?.id as string | undefined;
         if (!nextSessionId) {
@@ -830,7 +969,7 @@ function GameContent() {
         await syncSessionState(nextSessionId);
       } catch (nextError) {
         if (!disposed) {
-          setError((nextError as Error).message || "游戏初始化失败");
+          setError(getFriendlyErrorMessage(nextError, "游戏初始化失败"));
         }
       } finally {
         if (!disposed) {
@@ -868,48 +1007,32 @@ function GameContent() {
           check_result: checkResult,
         }),
       });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
+      await ensureApiOk(res, "向 KP 提交行动失败");
       const json = await res.json();
-      await syncSessionState(sessionId, true);
-      await refreshInvestigator(sessionId);
-      const result = json.result || {};
-      const dmMessage: UiMessage = {
-        id: `dm_${Date.now()}`,
-        sender: "dm",
-        content: typeof result.narration === "string" ? result.narration : "KP 暂时沉默了下来。",
-        type: "narrative",
-        requiredCheck: result.required_check as CocCheckRequest | undefined,
-        choices: Array.isArray(result.choices)
-          ? result.choices.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
-          : [],
-      };
+      const result = (json.result || {}) as Record<string, unknown>;
+      const dmMessage = buildDmMessage(result);
       await streamDmReply(dmMessage.content);
       setMessages((prev) => {
-        const next = [...prev, dmMessage];
-        if (Array.isArray(result.revealed_clues)) {
-          result.revealed_clues.forEach((clue: { id: string; title: string }) => {
-            next.push({
-              id: `clue_${clue.id}_${Date.now()}`,
-              sender: "dm",
-              content: `你获得线索【${clue.title}】`,
-              type: "system",
-            });
-          });
-        }
-        if (Array.isArray(result.granted_handouts)) {
-          result.granted_handouts.forEach((handout: { id: string; title: string }) => {
-            next.push({
-              id: `handout_${handout.id}_${Date.now()}`,
-              sender: "dm",
-              content: `你获得资料【${handout.title}】`,
-              type: "system",
-            });
-          });
-        }
-        return next;
+        return [...prev, dmMessage, ...buildRewardMessages(result)];
       });
+      const refreshResults = await Promise.allSettled([
+        syncSessionState(sessionId, true),
+        refreshInvestigator(sessionId),
+      ]);
+      const refreshErrors = refreshResults
+        .filter((item): item is PromiseRejectedResult => item.status === "rejected")
+        .map((item) => getFriendlyErrorMessage(item.reason, "卷宗刷新失败"));
+      if (refreshErrors.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `refresh_error_${Date.now()}`,
+            sender: "dm",
+            content: `KP 已给出回应，但调查卷宗刷新失败：${refreshErrors[0]}`,
+            type: "system",
+          },
+        ]);
+      }
     } catch (nextError) {
       setPendingReply(null);
       setMessages((prev) => [
@@ -917,7 +1040,7 @@ function GameContent() {
         {
           id: `error_${Date.now()}`,
           sender: "dm",
-          content: `KP 暂时失联：${(nextError as Error).message}`,
+          content: `KP 暂时失联：${getFriendlyErrorMessage(nextError, "行动提交失败，请稍后重试。")}`,
           type: "system",
         },
       ]);
@@ -937,9 +1060,7 @@ function GameContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ check }),
       });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
+      await ensureApiOk(res, "执行检定失败");
       const json = await res.json();
       const result = json.result as CocCheckResult;
       setMessages((prev) => [
@@ -959,7 +1080,7 @@ function GameContent() {
         {
           id: `roll_error_${Date.now()}`,
           sender: "dm",
-          content: `检定失败：${(nextError as Error).message}`,
+          content: `检定失败：${getFriendlyErrorMessage(nextError, "请稍后重试。")}`,
           type: "system",
         },
       ]);
@@ -1063,9 +1184,7 @@ function GameContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ item_id: itemId }),
       });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
+      await ensureApiOk(res, "切换装备失败");
       const json = await res.json();
       setCharacter(json.character as CocInvestigatorRecord);
     } catch (nextError) {
@@ -1074,7 +1193,7 @@ function GameContent() {
         {
           id: `equip_error_${Date.now()}`,
           sender: "dm",
-          content: `装备切换失败：${(nextError as Error).message}`,
+          content: `装备切换失败：${getFriendlyErrorMessage(nextError, "请稍后重试。")}`,
           type: "system",
         },
       ]);

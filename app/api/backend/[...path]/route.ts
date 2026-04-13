@@ -86,6 +86,110 @@ async function parseUpstreamJson(upstream: Response) {
   }
 }
 
+async function readUpstreamErrorDetail(upstream: Response) {
+  const text = await upstream.text();
+  if (!text.trim()) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(text) as {
+      detail?: unknown;
+      message?: unknown;
+      code?: unknown;
+    };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message;
+    }
+    if (
+      parsed.detail
+      && typeof parsed.detail === "object"
+      && "message" in parsed.detail
+      && typeof parsed.detail.message === "string"
+      && parsed.detail.message.trim()
+    ) {
+      return parsed.detail.message;
+    }
+  } catch {
+  }
+  return text;
+}
+
+function buildProxyErrorResponse(path: string[], status: number, upstreamDetail?: string) {
+  const normalizedDetail = upstreamDetail?.trim();
+
+  if (status === 401) {
+    const response = NextResponse.json(
+      {
+        detail: "当前准入状态已失效，请重新完成验证后再继续。",
+        code: "BETA_ACCESS_REQUIRED",
+      },
+      { status },
+    );
+    response.cookies.delete(BETA_ACCESS_TOKEN_COOKIE_NAME);
+    return response;
+  }
+
+  if (status === 404) {
+    if (path[0] === "sessions") {
+      return NextResponse.json(
+        {
+          detail: "当前调查会话不存在或已失效，请返回案件列表重新进入。",
+          code: "SESSION_NOT_FOUND",
+        },
+        { status },
+      );
+    }
+    if (path[0] === "characters") {
+      return NextResponse.json(
+        {
+          detail: "当前调查员档案不存在或无权访问，请返回名录重新选择。",
+          code: "INVESTIGATOR_NOT_FOUND",
+        },
+        { status },
+      );
+    }
+    if (path[0] === "modules") {
+      return NextResponse.json(
+        {
+          detail: "当前案件档案不存在或尚未开放，请返回案件列表重新选择。",
+          code: "MODULE_NOT_FOUND",
+        },
+        { status },
+      );
+    }
+    return NextResponse.json(
+      {
+        detail: "请求的资源不存在或暂时不可用。",
+        code: "RESOURCE_NOT_FOUND",
+      },
+      { status },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      detail: status >= 500
+        ? "服务暂时异常，请稍后重试；若持续出现，请联系管理员检查后端日志。"
+        : normalizedDetail || "服务请求失败，请稍后重试。",
+      code: status >= 500 ? "UPSTREAM_ERROR" : "REQUEST_FAILED",
+    },
+    { status },
+  );
+}
+
+function buildUpstreamUnavailableResponse() {
+  return NextResponse.json(
+    {
+      detail: "后端服务暂时不可达，请稍后重试；若持续出现，请确认后端服务已启动。",
+      code: "UPSTREAM_UNREACHABLE",
+    },
+    { status: 502 },
+  );
+}
+
 async function proxy(request: NextRequest, path: string[]) {
   const isPublicBetaAccessRequest = isBetaAccessApiPath(path);
   const isAdminRequest = isAdminApiPath(path);
@@ -93,7 +197,13 @@ async function proxy(request: NextRequest, path: string[]) {
   const localBypass = isLocalBetaAccessBypassed();
 
   if (!localBypass && !isPublicBetaAccessRequest && !isAdminRequest) {
-    if (!betaAccessToken || !(await validateBetaAccessToken(betaAccessToken))) {
+    let hasValidBetaAccess = false;
+    try {
+      hasValidBetaAccess = betaAccessToken ? await validateBetaAccessToken(betaAccessToken) : false;
+    } catch {
+      return buildUpstreamUnavailableResponse();
+    }
+    if (!hasValidBetaAccess) {
       return unauthorizedResponse();
     }
   }
@@ -127,7 +237,12 @@ async function proxy(request: NextRequest, path: string[]) {
     (init as RequestInit & { duplex?: "half" }).duplex = "half";
   }
 
-  const upstream = await fetch(targetUrl, init);
+  let upstream: Response;
+  try {
+    upstream = await fetch(targetUrl, init);
+  } catch {
+    return buildUpstreamUnavailableResponse();
+  }
 
   if (isPublicBetaAccessRequest && ["verify-code", "session"].includes(path[1] || "")) {
     const payload = await parseUpstreamJson(upstream);
@@ -171,6 +286,11 @@ async function proxy(request: NextRequest, path: string[]) {
       response.cookies.delete(BETA_ACCESS_TOKEN_COOKIE_NAME);
     }
     return response;
+  }
+
+  if (!upstream.ok) {
+    const upstreamDetail = await readUpstreamErrorDetail(upstream);
+    return buildProxyErrorResponse(path, upstream.status, upstreamDetail);
   }
 
   return buildProxyResponse(upstream);

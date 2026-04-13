@@ -59,6 +59,41 @@
     --highlight-color: rgba(31, 32, 65, 0.14);
   }
 
+  :root,
+  [data-theme="hub"],
+  [data-theme="dnd"],
+  [data-theme="coc"] {
+    --background: var(--bg-color);
+    --foreground: var(--ink-color);
+    --card: var(--paper-light);
+    --card-foreground: var(--ink-color);
+    --popover: var(--paper-light);
+    --popover-foreground: var(--ink-color);
+    --primary: var(--ink-color);
+    --primary-foreground: var(--paper-light);
+    --secondary: color-mix(in srgb, var(--paper-light) 72%, white 28%);
+    --secondary-foreground: var(--ink-color);
+    --muted: color-mix(in srgb, var(--paper-light) 68%, white 32%);
+    --muted-foreground: var(--ink-light);
+    --accent: var(--highlight-color);
+    --accent-foreground: var(--ink-color);
+    --destructive: color-mix(in srgb, var(--accent-color) 88%, black 12%);
+    --destructive-foreground: var(--paper-light);
+    --border: var(--ink-color);
+    --input: var(--ink-color);
+    --ring: var(--accent-color);
+    --input-background: color-mix(in srgb, var(--paper-light) 82%, white 18%);
+    --switch-background: color-mix(in srgb, var(--ink-color) 18%, transparent 82%);
+    --sidebar: var(--paper-light);
+    --sidebar-foreground: var(--ink-color);
+    --sidebar-primary: var(--accent-color);
+    --sidebar-primary-foreground: var(--paper-light);
+    --sidebar-accent: var(--highlight-color);
+    --sidebar-accent-foreground: var(--ink-color);
+    --sidebar-border: var(--ink-color);
+    --sidebar-ring: var(--accent-color);
+  }
+
   body {
     @apply text-theme-ink font-serif;
     background-color: var(--bg-color);
@@ -71,6 +106,15 @@
 
   a, button, [role="button"], input[type="submit"], input[type="button"], .cursor-pointer {
     cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' fill='%23ffcc00' stroke='%23000000' stroke-width='2' stroke-linejoin='round'%3E%3Cpolygon points='3 3 11 22 14 14 22 11 3 3'/%3E%3C/svg%3E") 3 3, auto !important;
+  }
+
+  ::selection {
+    background-color: var(--accent-color);
+    color: var(--paper-light);
+  }
+
+  :where(a, button, input, textarea, select, summary, [role="button"], [data-slot="button"], [data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]) {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
@@ -177,6 +221,103 @@
   .riso-title {
     @apply font-bold tracking-widest text-theme-ink riso-text;
     text-shadow: 2px 2px 0 var(--highlight-color);
+  }
+
+  .riso-action {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.06)),
+      var(--paper-light);
+    border: 2px solid var(--ink-color);
+    box-shadow: 3px 3px 0 rgba(31, 32, 65, 0.72);
+    color: var(--ink-color);
+    transition:
+      transform 0.18s ease,
+      box-shadow 0.18s ease,
+      background-color 0.18s ease,
+      color 0.18s ease,
+      border-color 0.18s ease;
+  }
+
+  .riso-action:hover,
+  .riso-action[data-active="true"],
+  .riso-action[data-state="checked"],
+  .riso-action[data-state="on"],
+  .riso-action[data-state="open"] {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.02)),
+      color-mix(in srgb, var(--highlight-color) 88%, var(--paper-light) 12%);
+    box-shadow: 4px 4px 0 var(--accent-color);
+    color: var(--accent-color);
+    transform: translate(-1px, -1px);
+  }
+
+  .riso-action:focus-visible {
+    box-shadow:
+      0 0 0 2px var(--paper-light),
+      4px 4px 0 var(--accent-color);
+  }
+
+  .riso-action:active {
+    box-shadow: 1px 1px 0 var(--ink-color);
+    transform: translate(1px, 1px);
+  }
+
+  .riso-field {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.04)),
+      var(--input-background);
+    border: 2px solid var(--ink-color);
+    box-shadow: 3px 3px 0 rgba(31, 32, 65, 0.52);
+    color: var(--ink-color);
+    transition:
+      box-shadow 0.18s ease,
+      border-color 0.18s ease,
+      background-color 0.18s ease;
+  }
+
+  .riso-field:hover {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.04)),
+      color-mix(in srgb, var(--input-background) 82%, white 18%);
+  }
+
+  .riso-field:focus-visible,
+  .riso-field[data-state="open"] {
+    border-color: var(--accent-color);
+    box-shadow:
+      0 0 0 2px var(--paper-light),
+      4px 4px 0 var(--accent-color);
+  }
+
+  .riso-nav-link {
+    background-color: transparent;
+    border: 2px solid transparent;
+    color: var(--ink-color);
+    transition:
+      transform 0.18s ease,
+      box-shadow 0.18s ease,
+      background-color 0.18s ease,
+      color 0.18s ease,
+      border-color 0.18s ease;
+  }
+
+  .riso-nav-link:hover,
+  .riso-nav-link[data-active="true"] {
+    background-color: var(--highlight-color);
+    border-color: var(--ink-color);
+    box-shadow: 4px 4px 0 rgba(31, 32, 65, 0.45);
+    transform: translate(-1px, -1px);
+  }
+
+  .riso-nav-link[data-active="true"] {
+    color: var(--accent-color);
+  }
+
+  .riso-nav-link:focus-visible {
+    border-color: var(--accent-color);
+    box-shadow:
+      0 0 0 2px var(--paper-light),
+      4px 4px 0 var(--accent-color);
   }
   
   .font-vt323 {

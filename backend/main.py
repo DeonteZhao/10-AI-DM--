@@ -178,8 +178,19 @@ def list_published_scenarios() -> list[CocScenario]:
   return [structured_modules[module_id] for module_id in sorted(structured_modules.keys())]
 
 
-def list_visible_published_scenarios() -> list[CocScenario]:
+def ensure_baseline_module_available() -> CocScenario | None:
   module = structured_modules.get(BASELINE_MODULE_ID)
+  if module:
+    return module
+  try:
+    write_seed_scenario_to_system()
+  except Exception:
+    return structured_modules.get(BASELINE_MODULE_ID)
+  return structured_modules.get(BASELINE_MODULE_ID)
+
+
+def list_visible_published_scenarios() -> list[CocScenario]:
+  module = ensure_baseline_module_available()
   return [module] if module else []
 
 
@@ -1880,6 +1891,10 @@ def parse_json_block(content: str) -> dict:
 
 
 def ensure_default_structured(module_id: str) -> CocScenario:
+  if module_id == BASELINE_MODULE_ID:
+    baseline = ensure_baseline_module_available()
+    if baseline:
+      return baseline
   scenario = get_published_scenario(module_id)
   if scenario:
     return scenario
@@ -3679,16 +3694,24 @@ async def gm_action(
   x_forwarded_for: str | None = Header(default=None),
   x_real_ip: str | None = Header(default=None),
 ):
-  require_owned_session(payload.session_id, authorization)
-  reply = await generate_ai_reply(
-    payload.session_id,
-    payload.message,
-    payload.check_result.model_dump() if payload.check_result else None,
-    x_geo_country,
-    x_forwarded_for,
-    x_real_ip,
-  )
-  return {"result": reply}
+  try:
+    require_owned_session(payload.session_id, authorization)
+    reply = await generate_ai_reply(
+      payload.session_id,
+      payload.message,
+      payload.check_result.model_dump() if payload.check_result else None,
+      x_geo_country,
+      x_forwarded_for,
+      x_real_ip,
+    )
+    return {"result": reply}
+  except HTTPException:
+    raise
+  except Exception:
+    raise HTTPException(
+      status_code=500,
+      detail={"message": "KP 当前无法完成回应，请稍后重试。", "code": "GM_ACTION_FAILED"},
+    )
 
 
 @app.post("/gm/action/external")
@@ -3733,5 +3756,4 @@ async def startup_event():
   init_db()
   load_structured_modules()
   load_characters_from_db()
-  if default_docx_path().exists():
-    write_seed_scenario_to_system()
+  write_seed_scenario_to_system()
